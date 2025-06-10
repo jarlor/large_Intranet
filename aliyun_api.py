@@ -10,6 +10,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 class AliyunSecurityGroup:
+    # 安全组ID和地区ID
+    SECURITY_GROUP_ID = 'sg-2ze22mgbvzziua91enkk'
+    REGION_ID = 'cn-beijing'
+    
     @staticmethod
     def create_client() -> Ecs20140526Client:
         """
@@ -66,8 +70,8 @@ class AliyunSecurityGroup:
             
             # 创建请求
             request = ecs_20140526_models.AuthorizeSecurityGroupRequest(
-                region_id='cn-beijing',  # 地区ID
-                security_group_id='sg-2ze22mgbvzziua91enkk',  # 安全组ID
+                region_id=AliyunSecurityGroup.REGION_ID,
+                security_group_id=AliyunSecurityGroup.SECURITY_GROUP_ID,
                 permissions=[permission]
             )
             
@@ -81,6 +85,52 @@ class AliyunSecurityGroup:
             
         except Exception as e:
             logger.error(f"开放端口 {port} 失败: {e}")
+            if hasattr(e, 'message'):
+                logger.error(f"错误信息: {e.message}")
+            if hasattr(e, 'data') and e.data.get("Recommend"):
+                logger.error(f"诊断信息: {e.data.get('Recommend')}")
+            return False
+    
+    @staticmethod
+    def close_port(port, protocol='TCP'):
+        """
+        在安全组中关闭指定端口
+        @param port: 端口号
+        @param protocol: 协议，默认TCP
+        @return: 是否成功
+        """
+        # 安全检查
+        if not isinstance(port, int) or port <= 0 or port > 65535:
+            logger.error(f"无效的端口号: {port}")
+            return False
+            
+        try:
+            client = AliyunSecurityGroup.create_client()
+            if not client:
+                return False
+                
+            # 端口范围
+            port_range = f"{port}/{port}"
+            
+            # 创建请求
+            request = ecs_20140526_models.RevokeSecurityGroupRequest(
+                region_id=AliyunSecurityGroup.REGION_ID,
+                security_group_id=AliyunSecurityGroup.SECURITY_GROUP_ID,
+                ip_protocol=protocol.upper(),  # 转换为大写
+                port_range=port_range,
+                source_cidr_ip='0.0.0.0/0'  # 允许所有IP访问
+            )
+            
+            runtime = util_models.RuntimeOptions()
+            
+            # 发送请求
+            client.revoke_security_group_with_options(request, runtime)
+            
+            logger.info(f"成功关闭端口 {port}/{protocol}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"关闭端口 {port} 失败: {e}")
             if hasattr(e, 'message'):
                 logger.error(f"错误信息: {e.message}")
             if hasattr(e, 'data') and e.data.get("Recommend"):

@@ -67,7 +67,7 @@
                                 <button class="toggle-btn {% if proxy.status == 'enabled' %}bg-red-500 hover:bg-red-600{% else %}bg-green-500 hover:bg-green-600{% endif %} text-white px-2 py-1 rounded mr-1"
                                         data-name="{{ proxy.name }}"
                                         data-action="{{ 'disable' if proxy.status == 'enabled' else 'enable' }}">
-                                    {{ '禁用' if proxy.status == 'enabled' else '启用' }}
+                                    {{ '关闭端口' if proxy.status == 'enabled' else '开放端口' }}
                                 </button>
                                 <button class="edit-btn bg-yellow-500 hover:bg-yellow-600 text-white px-2 py-1 rounded mr-1"
                                         data-name="{{ proxy.name }}"
@@ -274,11 +274,12 @@
                 const action = this.getAttribute('data-action'); // enable 或 disable
                 const button = this;
                 
-                console.log(`尝试${action === 'enable' ? '启用' : '禁用'}代理: ${proxyName}`);
+                const statusText = action === 'enable' ? '开放端口' : '关闭端口';
+                console.log(`尝试${statusText}，代理: ${proxyName}`);
                 
                 // 禁用按钮，显示加载状态
                 button.disabled = true;
-                button.textContent = action === 'enable' ? '正在启用...' : '正在禁用...';
+                button.textContent = action === 'enable' ? '正在开放端口...' : '正在关闭端口...';
                 
                 // 调用API
                 fetch(`/api/proxy/${proxyName}/${action}`, {
@@ -306,7 +307,7 @@
                         alert('错误: ' + data.message);
                         // 恢复按钮状态
                         button.disabled = false;
-                        button.textContent = action === 'enable' ? '启用' : '禁用';
+                        button.textContent = action === 'enable' ? '开放端口' : '关闭端口';
                     }
                 })
                 .catch(error => {
@@ -314,7 +315,7 @@
                     alert('操作失败: ' + error.message);
                     // 恢复按钮状态
                     button.disabled = false;
-                    button.textContent = action === 'enable' ? '启用' : '禁用';
+                    button.textContent = action === 'enable' ? '开放端口' : '关闭端口';
                 });
             });
         });

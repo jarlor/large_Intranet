@@ -3,6 +3,9 @@ import tomli_w
 import os
 import json
 from models import FrpcConfig, Proxy
+import logging
+
+logger = logging.getLogger(__name__)
 
 CONFIG_PATH = "/opt/frp/frpc.toml"
 # 使用单独的文件存储端口映射，确保重启后不丢失
@@ -14,19 +17,29 @@ def load_port_mapping():
     if os.path.exists(PORT_MAPPING_PATH):
         try:
             with open(PORT_MAPPING_PATH, 'r') as f:
-                return json.load(f)
+                mapping = json.load(f)
+                # 确保所有键和值都是正确的类型
+                result = {}
+                for k, v in mapping.items():
+                    try:
+                        result[k] = int(v)
+                    except (ValueError, TypeError):
+                        pass
+                return result
         except Exception as e:
-            print(f"加载端口映射出错: {e}")
+            logger.error(f"加载端口映射出错: {e}")
     return {}
 
 # 将端口映射保存到文件
 def save_port_mapping(mapping):
     try:
+        # 确保目录存在
+        os.makedirs(os.path.dirname(PORT_MAPPING_PATH), exist_ok=True)
         with open(PORT_MAPPING_PATH, 'w') as f:
             json.dump(mapping, f)
         return True
     except Exception as e:
-        print(f"保存端口映射出错: {e}")
+        logger.error(f"保存端口映射出错: {e}")
         return False
 
 # 初始化加载端口映射
