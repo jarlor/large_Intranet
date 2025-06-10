@@ -44,6 +44,58 @@ class AliyunSecurityGroup:
             return None
 
     @staticmethod
+    def check_port_status(port, protocol="TCP"):
+        """
+        检查指定端口在安全组中的状态
+        @param port: 端口号
+        @param protocol: 协议，默认TCP
+        @return: (bool, str) - (是否已开放, 详细信息)
+        """
+        # 安全检查
+        if not isinstance(port, int) or port <= 0 or port > 65535:
+            logger.error(f"无效的端口号: {port}")
+            return False, "无效的端口号"
+
+        try:
+            client = AliyunSecurityGroup.create_client()
+            if not client:
+                return False, "无法创建阿里云客户端"
+
+            # 创建查询安全组规则的请求
+            request = ecs_20140526_models.DescribeSecurityGroupAttributeRequest(
+                region_id=AliyunSecurityGroup.REGION_ID,
+                security_group_id=AliyunSecurityGroup.SECURITY_GROUP_ID,
+                nic_type="internet"  # 查询公网规则
+            )
+
+            runtime = util_models.RuntimeOptions()
+
+            # 发送请求
+            response = client.describe_security_group_attribute_with_options(request, runtime)
+            
+            # 检查端口是否在规则中
+            port_range = f"{port}/{port}"
+            protocol_upper = protocol.upper()
+            
+            # 检查入方向规则
+            for permission in response.body.permissions.permission:
+                if permission.port_range == port_range and permission.ip_protocol == protocol_upper:
+                    logger.info(f"端口 {port}/{protocol} 已在安全组中开放")
+                    return True, f"端口 {port}/{protocol} 已在安全组中开放"
+            
+            logger.info(f"端口 {port}/{protocol} 未在安全组中开放")
+            return False, f"端口 {port}/{protocol} 未在安全组中开放"
+
+        except Exception as e:
+            error_msg = f"检查端口 {port} 状态失败: {e}"
+            logger.error(error_msg)
+            if hasattr(e, "message"):
+                logger.error(f"错误信息: {e.message}")
+            if hasattr(e, "data") and e.data.get("Recommend"):
+                logger.error(f"诊断信息: {e.data.get('Recommend')}")
+            return False, error_msg
+
+    @staticmethod
     def open_port(port, protocol="TCP", description=None):
         """
         在安全组中开放指定端口
@@ -58,6 +110,12 @@ class AliyunSecurityGroup:
             return False
 
         try:
+            # 先检查端口状态
+            is_open, msg = AliyunSecurityGroup.check_port_status(port, protocol)
+            if is_open:
+                logger.info(f"端口 {port}/{protocol} 已经开放，无需操作")
+                return True
+                
             client = AliyunSecurityGroup.create_client()
             if not client:
                 return False
@@ -116,6 +174,12 @@ class AliyunSecurityGroup:
             return False
 
         try:
+            # 先检查端口状态
+            is_open, msg = AliyunSecurityGroup.check_port_status(port, protocol)
+            if not is_open:
+                logger.info(f"端口 {port}/{protocol} 已经关闭，无需操作")
+                return True
+                
             client = AliyunSecurityGroup.create_client()
             if not client:
                 return False
