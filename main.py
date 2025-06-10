@@ -203,6 +203,52 @@ async def get_proxy(name: str, username: str = Depends(verify_session)):
             return proxy
     raise HTTPException(status_code=404, detail="Proxy not found")
 
+@app.post("/api/proxy/{name}/enable")
+async def enable_proxy_route(name: str, username: str = Depends(verify_session)):
+    success = config.enable_proxy(name)
+    if not success:
+        return JSONResponse({
+            "success": False,
+            "message": "无法启用代理"
+        }, status_code=400)
+    
+    # 重启 frpc 服务以应用更改
+    try:
+        subprocess.run(["sudo", "systemctl", "restart", "frpc"], 
+                      capture_output=True, text=True, check=True)
+        return JSONResponse({
+            "success": True,
+            "message": f"代理 {name} 已成功启用"
+        })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "message": f"重启服务失败: {str(e)}"
+        }, status_code=500)
+
+@app.post("/api/proxy/{name}/disable")
+async def disable_proxy_route(name: str, username: str = Depends(verify_session)):
+    success = config.disable_proxy(name)
+    if not success:
+        return JSONResponse({
+            "success": False,
+            "message": "无法禁用代理"
+        }, status_code=400)
+    
+    # 重启 frpc 服务以应用更改
+    try:
+        subprocess.run(["sudo", "systemctl", "restart", "frpc"], 
+                      capture_output=True, text=True, check=True)
+        return JSONResponse({
+            "success": True,
+            "message": f"代理 {name} 已成功禁用"
+        })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "message": f"重启服务失败: {str(e)}"
+        }, status_code=500)
+
 def get_tailscale_ips():
     try:
         # 执行 tailscale status 命令获取节点信息，以 JSON 格式输出

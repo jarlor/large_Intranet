@@ -7,6 +7,7 @@ class Proxy(BaseModel):
     localIP: str
     localPort: int
     remotePort: int
+    disabled: Optional[bool] = False
 
 class FrpcConfig(BaseModel):
     serverAddr: str

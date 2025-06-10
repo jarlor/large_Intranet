@@ -42,7 +42,11 @@ def write_config(config_data):
 def get_proxies():
     config = read_config()
     if config:
-        return config.get("proxies", [])
+        proxies = config.get("proxies", [])
+        # 添加状态信息
+        for proxy in proxies:
+            proxy["status"] = "disabled" if proxy.get("disabled") == True else "enabled"
+        return proxies
     return []
 
 def add_proxy(proxy):
@@ -84,4 +88,30 @@ def delete_proxy(name):
     config["proxies"] = [p for p in config.get("proxies", []) if p.get("name") != name]
     
     return write_config(config)
+
+def enable_proxy(name):
+    config = read_config()
+    if not config:
+        return False
+    
+    # 查找并启用代理
+    for proxy in config.get("proxies", []):
+        if proxy.get("name") == name:
+            proxy["disabled"] = False
+            return write_config(config)
+    
+    return False
+
+def disable_proxy(name):
+    config = read_config()
+    if not config:
+        return False
+    
+    # 查找并禁用代理
+    for proxy in config.get("proxies", []):
+        if proxy.get("name") == name:
+            proxy["disabled"] = True
+            return write_config(config)
+    
+    return False
 
