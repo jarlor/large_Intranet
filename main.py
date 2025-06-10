@@ -15,8 +15,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 import sys
 from aliyun_api import AliyunSecurityGroup
+from dotenv import load_dotenv
+from pathlib import Path
 
 app = FastAPI(title="FRP Config Manager")
+
+# 加载环境变量
+env_path = Path('/opt/frp/.env')
+load_dotenv(dotenv_path=env_path)
 
 # 配置日志
 logging.basicConfig(
@@ -41,11 +47,20 @@ security = HTTPBasic()
 # 存储 session token
 SESSIONS = {}
 
-# 用户认证信息 - 实际应用中应存储在安全的配置文件或数据库中
-# 密码应该进行哈希处理
-USERS = {
-    "jarlor": "123zjl.00"  # 示例用户名和密码，请修改为更强的密码
-}
+# 从环境变量中获取用户认证信息
+def get_users_from_env():
+    username = os.getenv('FRP_ADMIN_USER')
+    password = os.getenv('FRP_ADMIN_PASSWORD')
+    
+    if not username or not password:
+        # 如果环境变量未设置，使用默认值并记录警告
+        logger.warning("环境变量中未找到用户认证信息，使用默认值")
+        return {"jarlor": "123zjl.00"}
+    
+    return {username: password}
+
+# 获取用户信息
+USERS = get_users_from_env()
 
 # 登录页
 @app.get("/login", response_class=HTMLResponse)

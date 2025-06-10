@@ -1,6 +1,7 @@
 import os
+from dotenv import load_dotenv
+from pathlib import Path
 from alibabacloud_ecs20140526.client import Client as Ecs20140526Client
-from alibabacloud_credentials.client import Client as CredentialClient
 from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_ecs20140526 import models as ecs_20140526_models
 from alibabacloud_tea_util import models as util_models
@@ -9,24 +10,40 @@ from alibabacloud_tea_util.client import Client as UtilClient
 import logging
 logger = logging.getLogger(__name__)
 
+# 加载环境变量
+# 首先尝试从项目根目录加载.env文件
+env_path = Path('/opt/frp/.env')
+load_dotenv(dotenv_path=env_path)
+
 class AliyunSecurityGroup:
-    # 安全组ID和地区ID
-    SECURITY_GROUP_ID = 'sg-2ze22mgbvzziua91enkk'
-    REGION_ID = 'cn-beijing'
+    # 从环境变量中获取配置
+    SECURITY_GROUP_ID = os.getenv('ALIYUN_SECURITY_GROUP_ID', 'sg-2ze22mgbvzziua91enkk')
+    REGION_ID = os.getenv('ALIYUN_REGION_ID', 'cn-beijing')
+    ENDPOINT = os.getenv('ALIYUN_API_ENDPOINT', 'ecs.cn-beijing.aliyuncs.com')
     
     @staticmethod
     def create_client() -> Ecs20140526Client:
         """
-        使用凭据初始化账号Client
+        使用环境变量中的AccessKey初始化账号Client
         @return: Client
         """
         try:
-            credential = CredentialClient()
+            # 从环境变量获取AccessKey
+            access_key_id = os.getenv('ALIYUN_ACCESS_KEY_ID')
+            access_key_secret = os.getenv('ALIYUN_ACCESS_KEY_SECRET')
+            
+            # 验证关键凭据是否存在
+            if not access_key_id or not access_key_secret:
+                logger.error("环境变量中未找到阿里云AccessKey，请检查.env文件配置")
+                return None
+                
+            # 使用AccessKey和Secret创建配置
             config = open_api_models.Config(
-                credential=credential
+                access_key_id=access_key_id,
+                access_key_secret=access_key_secret
             )
             # Endpoint 设置
-            config.endpoint = 'ecs.cn-beijing.aliyuncs.com'
+            config.endpoint = AliyunSecurityGroup.ENDPOINT
             return Ecs20140526Client(config)
         except Exception as e:
             logger.error(f"创建阿里云客户端失败: {e}")
