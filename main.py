@@ -15,15 +15,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 import sys
 from aliyun_api import AliyunSecurityGroup
-from dotenv import load_dotenv
-from pathlib import Path
+from dotenv import load_dotenv,find_dotenv
 
 app = FastAPI(title="FRP Config Manager")
 
 # 加载环境变量
-env_path = Path('/opt/frp/.env')
-load_dotenv(dotenv_path=env_path)
-
+load_dotenv(dotenv_path=find_dotenv())
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
