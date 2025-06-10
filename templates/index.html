@@ -274,6 +274,8 @@
                 const action = this.getAttribute('data-action'); // enable 或 disable
                 const button = this;
                 
+                console.log(`尝试${action === 'enable' ? '启用' : '禁用'}代理: ${proxyName}`);
+                
                 // 禁用按钮，显示加载状态
                 button.disabled = true;
                 button.textContent = action === 'enable' ? '正在启用...' : '正在禁用...';
@@ -281,14 +283,21 @@
                 // 调用API
                 fetch(`/api/proxy/${proxyName}/${action}`, {
                     method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                    }
                 })
                 .then(response => {
+                    console.log(`API响应状态: ${response.status}`);
                     if(response.ok) {
                         return response.json();
                     }
-                    throw new Error('服务器错误');
+                    return response.json().then(err => {
+                        throw new Error(err.message || '未知错误');
+                    });
                 })
                 .then(data => {
+                    console.log('API响应数据:', data);
                     if(data.success) {
                         // 操作成功，刷新页面
                         alert(data.message);
@@ -301,6 +310,7 @@
                     }
                 })
                 .catch(error => {
+                    console.error('API错误:', error);
                     alert('操作失败: ' + error.message);
                     // 恢复按钮状态
                     button.disabled = false;

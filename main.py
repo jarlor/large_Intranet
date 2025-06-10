@@ -12,8 +12,22 @@ import secrets
 from models import Proxy
 import config
 from starlette.exceptions import HTTPException as StarletteHTTPException
+import logging
+import sys
+from aliyun_api import AliyunSecurityGroup
 
 app = FastAPI(title="FRP Config Manager")
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('/tmp/frp_manager.log')
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # 挂载静态文件目录
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -112,7 +126,7 @@ async def read_root(request: Request, username: str = Depends(verify_session)):
         {
             "request": request,
             "proxies": proxies,
-            "config": server_config,  # 只传递服务器基本配置
+            "config": server_config,
             "tailscale_ips": tailscale_ips,
             "username": username,
         },
@@ -154,10 +168,23 @@ async def add_proxy(
     local_port: int = Form(...),
     remote_port: int = Form(...),
 ):
+    # 创建代理对象
     proxy = Proxy(
         name=name, type=proxy_type, localIP=local_ip, localPort=local_port, remotePort=remote_port
     )
 
+    # 先开放阿里云安全组端口
+    port_opened = AliyunSecurityGroup.open_port(
+        port=remote_port, 
+        protocol=proxy_type, 
+        description=f"FRP代理: {name}"
+    )
+    
+    if not port_opened:
+        # 如果开放端口失败，记录但继续执行（不阻止代理创建）
+        logger.warning(f"无法在阿里云安全组中开放端口 {remote_port}，但将继续创建代理")
+
+    # 添加代理配置
     success = config.add_proxy(proxy)
     if not success:
         raise HTTPException(
@@ -175,6 +202,14 @@ async def update_proxy(
     local_port: int = Form(...),
     remote_port: int = Form(...),
 ):
+    # 获取原始代理配置，检查是否修改了端口
+    original_proxy = None
+    try:
+        original_proxy = await get_proxy(name, username)
+    except HTTPException:
+        pass
+    
+    # 创建新代理对象
     proxy = Proxy(
         name=proxy_name,
         type=proxy_type,
@@ -182,7 +217,20 @@ async def update_proxy(
         localPort=local_port,
         remotePort=remote_port,
     )
-
+    
+    # 如果远程端口改变了或这是一个新代理，开放新端口
+    if not original_proxy or original_proxy.get("remotePort") != remote_port:
+        port_opened = AliyunSecurityGroup.open_port(
+            port=remote_port, 
+            protocol=proxy_type, 
+            description=f"FRP代理: {proxy_name}"
+        )
+        
+        if not port_opened:
+            # 如果开放端口失败，记录但继续执行（不阻止代理更新）
+            logger.warning(f"无法在阿里云安全组中开放端口 {remote_port}，但将继续更新代理")
+    
+    # 更新代理配置
     success = config.update_proxy(name, proxy)
     if not success:
         raise HTTPException(status_code=400, detail="Failed to update proxy or proxy not found")
@@ -205,17 +253,57 @@ async def get_proxy(name: str, username: str = Depends(verify_session)):
 
 @app.post("/api/proxy/{name}/enable")
 async def enable_proxy_route(name: str, username: str = Depends(verify_session)):
+    # 先检查代理是否存在
+    proxies = config.get_proxies()
+    proxy_exists = False
+    proxy_data = None
+    
+    for proxy in proxies:
+        if proxy.get("name") == name:
+            proxy_exists = True
+            proxy_data = proxy
+            # 如果代理已经启用，直接返回成功
+            if proxy.get("status") == "enabled":
+                return JSONResponse({
+                    "success": True,
+                    "message": f"代理 {name} 已经是启用状态"
+                })
+            break
+    
+    if not proxy_exists or not proxy_data:
+        return JSONResponse({
+            "success": False,
+            "message": f"代理 {name} 不存在"
+        }, status_code=404)
+    
+    # 在启用代理前，确保端口在阿里云安全组中已开放
+    try:
+        original_port = config.PORT_MAPPING.get(name)
+        if original_port and int(original_port) > 0:
+            # 开放端口
+            port_opened = AliyunSecurityGroup.open_port(
+                port=int(original_port),
+                protocol=proxy_data.get("type", "tcp"),
+                description=f"FRP代理: {name}"
+            )
+            
+            if not port_opened:
+                logger.warning(f"无法在阿里云安全组中开放端口 {original_port}，但将继续启用代理")
+    except Exception as e:
+        logger.error(f"开放端口时出错: {e}")
+    
+    # 启用代理
     success = config.enable_proxy(name)
     if not success:
         return JSONResponse({
             "success": False,
-            "message": "无法启用代理"
+            "message": f"无法启用代理 {name}，可能是找不到原始端口记录"
         }, status_code=400)
     
     # 重启 frpc 服务以应用更改
     try:
-        subprocess.run(["sudo", "systemctl", "restart", "frpc"], 
-                      capture_output=True, text=True, check=True)
+        result = subprocess.run(["sudo", "systemctl", "restart", "frpc"], 
+                    capture_output=True, text=True, check=True)
         return JSONResponse({
             "success": True,
             "message": f"代理 {name} 已成功启用"
@@ -228,17 +316,41 @@ async def enable_proxy_route(name: str, username: str = Depends(verify_session))
 
 @app.post("/api/proxy/{name}/disable")
 async def disable_proxy_route(name: str, username: str = Depends(verify_session)):
-    success = config.disable_proxy(name)
-    if not success:
+    logger.info(f"用户 {username} 请求禁用代理 {name}")
+    # 先检查代理是否存在
+    proxies = config.get_proxies()
+    proxy_exists = False
+    for proxy in proxies:
+        if proxy.get("name") == name:
+            proxy_exists = True
+            # 如果代理已经禁用，直接返回成功
+            if proxy.get("status") == "disabled":
+                return JSONResponse({
+                    "success": True,
+                    "message": f"代理 {name} 已经是禁用状态"
+                })
+            break
+    
+    if not proxy_exists:
         return JSONResponse({
             "success": False,
-            "message": "无法禁用代理"
+            "message": f"代理 {name} 不存在"
+        }, status_code=404)
+    
+    success = config.disable_proxy(name)
+    if not success:
+        logger.error(f"禁用代理 {name} 失败")
+        return JSONResponse({
+            "success": False,
+            "message": f"无法禁用代理 {name}，请检查日志获取详细信息"
         }, status_code=400)
     
     # 重启 frpc 服务以应用更改
     try:
-        subprocess.run(["sudo", "systemctl", "restart", "frpc"], 
-                      capture_output=True, text=True, check=True)
+        logger.info(f"重启 frpc 服务...")
+        result = subprocess.run(["sudo", "systemctl", "restart", "frpc"], 
+                    capture_output=True, text=True, check=True)
+        logger.info(f"frpc 服务重启成功")
         return JSONResponse({
             "success": True,
             "message": f"代理 {name} 已成功禁用"
