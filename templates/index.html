@@ -15,7 +15,7 @@
                 <div class="flex items-center">
                     <label class="mr-2 text-sm font-medium">服务器:</label>
                     <select id="serverSelect" class="border rounded px-3 py-1">
-                        <option value="local" {{ 'selected' if current_server == 'local' else '' }}>本地服务器</option>
+                        <option value="local" {{ 'selected' if current_server == 'local' else '' }}>本地&Tailscale 服务器</option>
                         <option value="remote" {{ 'selected' if current_server == 'remote' else '' }}>远程服务器 (100.66.95.34)</option>
                     </select>
                 </div>
@@ -27,7 +27,7 @@
         <!-- 服务器配置信息 -->
         <div class="bg-white p-4 mb-6 rounded shadow">
             <h2 class="text-xl font-semibold mb-3">服务器配置 
-                <span class="text-sm text-gray-600">({{ '本地' if current_server == 'local' else '远程 - 100.66.95.34' }})</span>
+                <span class="text-sm text-gray-600">({{ '本地&Tailscale 服务器' if current_server == 'local' else '远程服务器 - 100.66.95.34' }})</span>
             </h2>
             <div class="grid grid-cols-2 gap-4">
                 <div>
@@ -127,10 +127,14 @@
                 <div class="mb-4">
                     <label class="block text-sm font-medium mb-1">服务所在IP</label>
                     <select name="local_ip" required class="w-full p-2 border rounded">
-                        {% for ip in tailscale_ips %}
-                        <option value="{{ ip.address }}">{{ ip.hostname }} ({{ ip.address }})</option>
-                        {% endfor %}
-                        <option value="127.0.0.1">本地 (127.0.0.1)</option>
+                        {% if current_server == 'local' %}
+                            {% for ip in tailscale_ips %}
+                            <option value="{{ ip.address }}">{{ ip.hostname }} ({{ ip.address }})</option>
+                            {% endfor %}
+                            <option value="127.0.0.1">本地 (127.0.0.1)</option>
+                        {% else %}
+                            <option value="127.0.0.1">本地 (127.0.0.1)</option>
+                        {% endif %}
                     </select>
                 </div>
                 <div class="mb-4">
@@ -171,10 +175,14 @@
                 <div class="mb-4">
                     <label class="block text-sm font-medium mb-1">服务所在IP</label>
                     <select id="edit-localip" name="local_ip" required class="w-full p-2 border rounded">
-                        {% for ip in tailscale_ips %}
-                        <option value="{{ ip.address }}">{{ ip.hostname }} ({{ ip.address }})</option>
-                        {% endfor %}
-                        <option value="127.0.0.1">本地 (127.0.0.1)</option>
+                        {% if current_server == 'local' %}
+                            {% for ip in tailscale_ips %}
+                            <option value="{{ ip.address }}">{{ ip.hostname }} ({{ ip.address }})</option>
+                            {% endfor %}
+                            <option value="127.0.0.1">本地 (127.0.0.1)</option>
+                        {% else %}
+                            <option value="127.0.0.1">本地 (127.0.0.1)</option>
+                        {% endif %}
                     </select>
                 </div>
                 <div class="mb-4">
@@ -231,24 +239,40 @@
                 
                 // 设置IP下拉框的选中值
                 const ipSelect = document.getElementById('edit-localip');
-                let foundOption = false;
-                for (let i = 0; i < ipSelect.options.length; i++) {
-                    if (ipSelect.options[i].value === localIP) {
-                        ipSelect.selectedIndex = i;
-                        foundOption = true;
-                        break;
+                const currentServer = document.getElementById('serverSelect').value;
+                
+                if (currentServer === 'local') {
+                    // 本地&Tailscale 服务器模式，支持 Tailscale IP
+                    let foundOption = false;
+                    for (let i = 0; i < ipSelect.options.length; i++) {
+                        if (ipSelect.options[i].value === localIP) {
+                            ipSelect.selectedIndex = i;
+                            foundOption = true;
+                            break;
+                        }
+                    }
+                    // 如果在选项中找不到匹配的IP，添加一个新选项
+                    if (!foundOption) {
+                        const newOption = document.createElement('option');
+                        newOption.value = localIP;
+                        newOption.text = `自定义IP (${localIP})`;
+                        ipSelect.add(newOption);
+                        ipSelect.value = localIP;
+                    }
+                } else {
+                    // 远程服务器模式，只支持本地 IP
+                    if (localIP === '127.0.0.1') {
+                        ipSelect.value = localIP;
+                    } else {
+                        // 如果不是本地IP，添加一个自定义选项
+                        const newOption = document.createElement('option');
+                        newOption.value = localIP;
+                        newOption.text = `自定义IP (${localIP})`;
+                        ipSelect.add(newOption);
+                        ipSelect.value = localIP;
                     }
                 }
-                // 如果在选项中找不到匹配的IP，添加一个新选项
-                if (!foundOption) {
-                    const newOption = document.createElement('option');
-                    newOption.value = localIP;
-                    newOption.text = `自定义IP (${localIP})`;
-                    ipSelect.add(newOption);
-                    ipSelect.value = localIP;
-                }
                 
-                const currentServer = document.getElementById('serverSelect').value;
                 document.getElementById('editForm').action = `/proxy/update/${name}`;
                 document.getElementById('editProxyModal').classList.remove('hidden');
             });
