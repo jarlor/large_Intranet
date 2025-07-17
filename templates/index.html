@@ -300,7 +300,7 @@
                 }
                 throw new Error('服务器错误');
             })
-            .then data => {
+            .then(data => {
                 if(data.success) {
                     alert('配置已保存，服务已重启');
                 } else {
