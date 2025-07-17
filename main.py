@@ -316,49 +316,103 @@ async def enable_proxy_route(name: str, username: str = Depends(verify_session),
                 "success": False,
                 "message": "无法确定代理的远程端口"
             }, status_code=400)
-            
-        # 检查端口在阿里云安全组中的状态
-        protocol = proxy.get("type", "tcp")
-        is_open, status_msg = AliyunSecurityGroup.check_port_status(
-            port=remote_port,
-            protocol=protocol
-        )
         
-        # 如果端口已开放，跳过开放步骤
-        if not is_open:
-            # 在阿里云安全组中开放端口
-            success = AliyunSecurityGroup.open_port(
+        # 尝试检查并开放阿里云安全组端口
+        aliyun_operation_success = False
+        aliyun_error_message = ""
+        
+        try:
+            # 检查端口在阿里云安全组中的状态
+            protocol = proxy.get("type", "tcp")
+            port_status_result = AliyunSecurityGroup.check_port_status(
                 port=remote_port,
-                protocol=protocol,
-                description=f"FRP代理: {name}"
+                protocol=protocol
             )
             
-            if not success:
-                return JSONResponse({
-                    "success": False,
-                    "message": f"无法在阿里云安全组中开放端口 {remote_port}"
-                }, status_code=500)
-        else:
-            logger.info(f"端口 {remote_port}/{protocol} 已在阿里云安全组中开放，无需操作")
+            # 检查返回结果是否有效
+            if port_status_result is not None and len(port_status_result) >= 2:
+                is_open, status_msg = port_status_result
+                
+                # 如果端口未开放，则开放端口
+                if not is_open:
+                    # 在阿里云安全组中开放端口
+                    success = AliyunSecurityGroup.open_port(
+                        port=remote_port,
+                        protocol=protocol,
+                        description=f"FRP代理: {name}"
+                    )
+                    
+                    if success:
+                        aliyun_operation_success = True
+                        logger.info(f"成功在阿里云安全组中开放端口 {remote_port}")
+                    else:
+                        aliyun_error_message = f"无法在阿里云安全组中开放端口 {remote_port}"
+                        logger.warning(aliyun_error_message)
+                else:
+                    aliyun_operation_success = True
+                    logger.info(f"端口 {remote_port}/{protocol} 已在阿里云安全组中开放，无需操作")
+            else:
+                aliyun_error_message = "无法检查阿里云安全组端口状态"
+                logger.warning(aliyun_error_message)
+                
+        except Exception as aliyun_error:
+            aliyun_error_message = f"阿里云安全组操作失败: {str(aliyun_error)}"
+            logger.error(aliyun_error_message)
             
         # 如果代理之前是被禁用的，还需要恢复其端口配置
+        local_operation_success = False
         if proxy.get("status") == "disabled":
-            config.enable_proxy(name, server)
+            local_operation_success = config.enable_proxy(name, server)
+        else:
+            local_operation_success = True
             
-            # 重启服务以应用更改
-            try:
-                if server == "remote":
-                    config.restart_remote_frpc()
-                else:
-                    subprocess.run(["sudo", "systemctl", "restart", "frpc"], 
-                                  capture_output=True, text=True, check=True)
-            except Exception as e:
-                logger.error(f"重启服务失败: {e}")
-                # 即使重启失败，我们也认为端口启用成功了
+        if not local_operation_success:
+            return JSONResponse({
+                "success": False,
+                "message": "无法启用本地代理配置"
+            }, status_code=500)
+        
+        # 重启服务以应用更改
+        restart_success = False
+        restart_error_message = ""
+        
+        try:
+            if server == "remote":
+                restart_success = config.restart_remote_frpc()
+            else:
+                subprocess.run(["sudo", "systemctl", "restart", "frpc"], 
+                              capture_output=True, text=True, check=True)
+                restart_success = True
+        except Exception as restart_error:
+            restart_error_message = f"重启服务失败: {str(restart_error)}"
+            logger.error(restart_error_message)
+        
+        # 构建响应消息
+        success_parts = []
+        warning_parts = []
+        
+        if local_operation_success:
+            success_parts.append("代理配置已启用")
+        
+        if restart_success:
+            success_parts.append("服务已重启")
+        else:
+            warning_parts.append(restart_error_message)
+        
+        if aliyun_operation_success:
+            success_parts.append("阿里云安全组端口已开放")
+        else:
+            warning_parts.append(aliyun_error_message)
+        
+        message = f"代理 {name} 的端口 {remote_port} 启用操作完成。"
+        if success_parts:
+            message += " 成功: " + "、".join(success_parts) + "。"
+        if warning_parts:
+            message += " 警告: " + "、".join(warning_parts) + "。"
         
         return JSONResponse({
             "success": True,
-            "message": f"代理 {name} 的端口 {remote_port} 已成功启用"
+            "message": message
         })
         
     except Exception as e:
@@ -409,46 +463,97 @@ async def disable_proxy_route(name: str, username: str = Depends(verify_session)
             config.PORT_MAPPING[name] = remote_port
             config.save_port_mapping(config.PORT_MAPPING)
         
-        # 检查端口在阿里云安全组中的状态
-        protocol = proxy.get("type", "tcp")
-        is_open, status_msg = AliyunSecurityGroup.check_port_status(
-            port=remote_port,
-            protocol=protocol
-        )
+        # 尝试检查并关闭阿里云安全组端口
+        aliyun_operation_success = False
+        aliyun_error_message = ""
         
-        # 如果端口已开放，则关闭端口
-        if is_open:
-            # 在阿里云安全组中关闭端口
-            success = AliyunSecurityGroup.close_port(
+        try:
+            # 检查端口在阿里云安全组中的状态
+            protocol = proxy.get("type", "tcp")
+            port_status_result = AliyunSecurityGroup.check_port_status(
                 port=remote_port,
                 protocol=protocol
             )
             
-            if not success:
-                return JSONResponse({
-                    "success": False,
-                    "message": f"无法在阿里云安全组中关闭端口 {remote_port}"
-                }, status_code=500)
-        else:
-            logger.info(f"端口 {remote_port}/{protocol} 已在阿里云安全组中关闭，无需操作")
+            # 检查返回结果是否有效
+            if port_status_result is not None and len(port_status_result) >= 2:
+                is_open, status_msg = port_status_result
+                
+                # 如果端口已开放，则关闭端口
+                if is_open:
+                    # 在阿里云安全组中关闭端口
+                    success = AliyunSecurityGroup.close_port(
+                        port=remote_port,
+                        protocol=protocol
+                    )
+                    
+                    if success:
+                        aliyun_operation_success = True
+                        logger.info(f"成功在阿里云安全组中关闭端口 {remote_port}")
+                    else:
+                        aliyun_error_message = f"无法在阿里云安全组中关闭端口 {remote_port}"
+                        logger.warning(aliyun_error_message)
+                else:
+                    aliyun_operation_success = True
+                    logger.info(f"端口 {remote_port}/{protocol} 已在阿里云安全组中关闭，无需操作")
+            else:
+                aliyun_error_message = "无法检查阿里云安全组端口状态"
+                logger.warning(aliyun_error_message)
+                
+        except Exception as aliyun_error:
+            aliyun_error_message = f"阿里云安全组操作失败: {str(aliyun_error)}"
+            logger.error(aliyun_error_message)
             
         # 将代理标记为禁用（修改端口为无效值）
-        config.disable_proxy(name, server)
+        local_operation_success = config.disable_proxy(name, server)
+        
+        if not local_operation_success:
+            return JSONResponse({
+                "success": False,
+                "message": "无法禁用本地代理配置"
+            }, status_code=500)
         
         # 重启服务以应用更改
+        restart_success = False
+        restart_error_message = ""
+        
         try:
             if server == "remote":
-                config.restart_remote_frpc()
+                restart_success = config.restart_remote_frpc()
             else:
                 subprocess.run(["sudo", "systemctl", "restart", "frpc"], 
                               capture_output=True, text=True, check=True)
-        except Exception as e:
-            logger.error(f"重启服务失败: {e}")
-            # 即使重启失败，我们也认为端口禁用成功了，因为安全组规则已更新
+                restart_success = True
+        except Exception as restart_error:
+            restart_error_message = f"重启服务失败: {str(restart_error)}"
+            logger.error(restart_error_message)
+        
+        # 构建响应消息
+        success_parts = []
+        warning_parts = []
+        
+        if local_operation_success:
+            success_parts.append("代理配置已禁用")
+        
+        if restart_success:
+            success_parts.append("服务已重启")
+        else:
+            warning_parts.append(restart_error_message)
+        
+        if aliyun_operation_success:
+            success_parts.append("阿里云安全组端口已关闭")
+        else:
+            warning_parts.append(aliyun_error_message)
+        
+        message = f"代理 {name} 的端口 {remote_port} 禁用操作完成。"
+        if success_parts:
+            message += " 成功: " + "、".join(success_parts) + "。"
+        if warning_parts:
+            message += " 警告: " + "、".join(warning_parts) + "。"
         
         return JSONResponse({
             "success": True,
-            "message": f"代理 {name} 的端口 {remote_port} 已成功禁用"
+            "message": message
         })
         
     except Exception as e:
