@@ -187,13 +187,20 @@ class AliyunSecurityGroup:
             # 端口范围
             port_range = f"{port}/{port}"
 
+            # 创建权限规则
+            permission = ecs_20140526_models.RevokeSecurityGroupRequestPermissions(
+                policy="accept",
+                priority="1",
+                ip_protocol=protocol.upper(),
+                port_range=port_range,
+                source_cidr_ip="0.0.0.0/0",
+            )
+
             # 创建请求
             request = ecs_20140526_models.RevokeSecurityGroupRequest(
                 region_id=AliyunSecurityGroup.REGION_ID,
                 security_group_id=AliyunSecurityGroup.SECURITY_GROUP_ID,
-                ip_protocol=protocol.upper(),  # 转换为大写
-                port_range=port_range,
-                source_cidr_ip="0.0.0.0/0",  # 允许所有IP访问
+                permissions=[permission],
             )
 
             runtime = util_models.RuntimeOptions()

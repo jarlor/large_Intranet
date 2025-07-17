@@ -43,6 +43,9 @@
                 <h2 class="text-xl font-semibold">代理列表</h2>
                 <div>
                     <button id="saveConfigBtn" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded mr-2">保存并重启服务</button>
+                    {% if current_server == 'remote' %}
+                    <button id="serviceInfoBtn" class="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded mr-2">检查远程服务</button>
+                    {% endif %}
                     <button id="addProxyBtn" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded">添加代理</button>
                 </div>
             </div>
@@ -411,6 +414,58 @@
                 }
             });
         });
+        
+        {% if current_server == 'remote' %}
+        // 检查远程服务信息按钮的点击事件
+        document.getElementById('serviceInfoBtn').addEventListener('click', function() {
+            this.textContent = '检查中...';
+            this.disabled = true;
+            
+            fetch('/api/remote_service_info', {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if(data.success) {
+                    let info = data.data;
+                    let message = '=== 远程frpc服务信息 ===\n\n';
+                    message += '服务状态: ' + info.active + '\n';
+                    message += '服务启用: ' + info.enabled + '\n\n';
+                    message += '可执行文件: ' + info.frpc_path + '\n';
+                    message += '版本信息: ' + info.frpc_version + '\n\n';
+                    message += '配置文件: ' + info.config_file + '\n\n';
+                    message += '运行进程:\n' + (info.processes || '无frpc进程运行') + '\n\n';
+                    message += '最近日志:\n' + info.logs + '\n\n';
+                    message += '详细状态:\n' + info.status;
+                    
+                    // 创建一个新窗口来显示信息
+                    const newWindow = window.open('', '_blank', 'width=800,height=600,scrollbars=yes');
+                    newWindow.document.write(`
+                        <html>
+                            <head><title>远程frpc服务信息</title></head>
+                            <body>
+                                <h2>远程frpc服务信息</h2>
+                                <pre style="white-space: pre-wrap; font-family: monospace; font-size: 12px;">${message}</pre>
+                            </body>
+                        </html>
+                    `);
+                    newWindow.document.close();
+                } else {
+                    alert('获取远程服务信息失败: ' + data.message);
+                }
+            })
+            .catch(error => {
+                alert('检查失败: ' + error.message);
+            })
+            .finally(() => {
+                this.textContent = '检查远程服务';
+                this.disabled = false;
+            });
+        });
+        {% endif %}
     </script>
 </body>
 </html>

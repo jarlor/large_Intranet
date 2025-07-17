@@ -187,6 +187,30 @@ async def test_remote_connection(username: str = Depends(verify_session)):
             "message": f"连接测试失败: {str(e)}"
         })
 
+# 添加获取远程服务信息的路由
+@app.get("/api/remote_service_info")
+async def get_remote_service_info(username: str = Depends(verify_session)):
+    """获取远程服务器的frpc服务信息"""
+    try:
+        from config import get_remote_frpc_service_info
+        
+        info = get_remote_frpc_service_info()
+        if info:
+            return JSONResponse({
+                "success": True,
+                "data": info
+            })
+        else:
+            return JSONResponse({
+                "success": False,
+                "message": "无法获取远程服务信息，请检查SSH连接"
+            })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "message": f"获取远程服务信息失败: {str(e)}"
+        })
+
 # 添加保存并重启服务的路由
 @app.post("/save_restart")
 async def save_restart(username: str = Depends(verify_session), server: str = Form("local")):
@@ -197,7 +221,7 @@ async def save_restart(username: str = Depends(verify_session), server: str = Fo
             if not success:
                 return JSONResponse({
                     "success": False,
-                    "message": "重启远程服务失败"
+                    "message": "重启远程frpc服务失败。可能的原因：1) SSH连接问题 2) frpc服务未正确安装 3) 配置文件有错误 4) 权限不足。请使用'检查远程服务'按钮查看详细信息。"
                 }, status_code=500)
         else:
             # 重启本地 frpc 服务
@@ -215,7 +239,7 @@ async def save_restart(username: str = Depends(verify_session), server: str = Fo
     except subprocess.CalledProcessError as e:
         return JSONResponse({
             "success": False,
-            "message": f"重启服务失败: {e.stderr}"
+            "message": f"重启本地frpc服务失败: {e.stderr}"
         }, status_code=500)
     except Exception as e:
         return JSONResponse({

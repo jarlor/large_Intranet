@@ -266,20 +266,220 @@ def restart_remote_frpc():
         return False
     
     try:
+        # 首先检查frpc服务是否存在
+        stdin, stdout, stderr = ssh.exec_command("sudo systemctl status frpc")
+        status_output = stdout.read().decode('utf-8')
+        status_error = stderr.read().decode('utf-8')
+        
+        logger.info(f"frpc服务状态检查: {status_output}")
+        if status_error:
+            logger.warning(f"状态检查警告: {status_error}")
+        
+        # 尝试重启服务
         stdin, stdout, stderr = ssh.exec_command("sudo systemctl restart frpc")
         exit_status = stdout.channel.recv_exit_status()
         
         if exit_status == 0:
             logger.info("成功重启远程frpc服务")
-            return True
+            
+            # 验证服务是否真正启动
+            stdin, stdout, stderr = ssh.exec_command("sudo systemctl is-active frpc")
+            service_status = stdout.read().decode('utf-8').strip()
+            
+            if service_status == "active":
+                logger.info("远程frpc服务确认已启动")
+                return True
+            else:
+                logger.error(f"远程frpc服务重启后状态异常: {service_status}")
+                # 尝试获取服务日志
+                stdin, stdout, stderr = ssh.exec_command("sudo journalctl -u frpc -n 10 --no-pager")
+                service_logs = stdout.read().decode('utf-8')
+                logger.error(f"frpc服务日志: {service_logs}")
+                return try_alternative_restart_methods(ssh)
         else:
             error_msg = stderr.read().decode('utf-8')
-            logger.error(f"重启远程frpc服务失败: {error_msg}")
-            return False
+            logger.error(f"重启远程frpc服务失败，退出码: {exit_status}, 错误: {error_msg}")
+            
+            # 尝试备选方案
+            return try_alternative_restart_methods(ssh)
             
     except Exception as e:
         logger.error(f"重启远程 frpc 服务失败: {e}")
         return False
+    finally:
+        ssh.close()
+
+def try_alternative_restart_methods(ssh):
+    """尝试其他重启方法"""
+    try:
+        logger.info("尝试使用备选方法重启frpc服务...")
+        
+        # 方法1: 先停止再启动
+        logger.info("尝试方法1: 先停止再启动服务")
+        stdin, stdout, stderr = ssh.exec_command("sudo systemctl stop frpc")
+        stop_exit_status = stdout.channel.recv_exit_status()
+        logger.info(f"停止服务退出码: {stop_exit_status}")
+        
+        stdin, stdout, stderr = ssh.exec_command("sudo systemctl start frpc")
+        start_exit_status = stdout.channel.recv_exit_status()
+        logger.info(f"启动服务退出码: {start_exit_status}")
+        
+        if start_exit_status == 0:
+            # 验证服务状态
+            stdin, stdout, stderr = ssh.exec_command("sudo systemctl is-active frpc")
+            service_status = stdout.read().decode('utf-8').strip()
+            if service_status == "active":
+                logger.info("方法1成功: 服务已重启并运行")
+                return True
+            else:
+                logger.warning(f"方法1: 服务启动但状态异常: {service_status}")
+        
+        # 方法2: 检查服务文件并重新加载
+        logger.info("尝试方法2: 检查服务文件并重新加载")
+        stdin, stdout, stderr = ssh.exec_command("sudo systemctl daemon-reload")
+        daemon_exit_status = stdout.channel.recv_exit_status()
+        logger.info(f"daemon-reload退出码: {daemon_exit_status}")
+        
+        stdin, stdout, stderr = ssh.exec_command("sudo systemctl start frpc")
+        start_exit_status = stdout.channel.recv_exit_status()
+        
+        if start_exit_status == 0:
+            stdin, stdout, stderr = ssh.exec_command("sudo systemctl is-active frpc")
+            service_status = stdout.read().decode('utf-8').strip()
+            if service_status == "active":
+                logger.info("方法2成功: 服务已重启并运行")
+                return True
+        
+        # 方法3: 直接杀死进程并重启
+        logger.info("尝试方法3: 直接杀死进程并重启")
+        stdin, stdout, stderr = ssh.exec_command("sudo pkill -f frpc")
+        kill_exit_status = stdout.channel.recv_exit_status()
+        logger.info(f"杀死进程退出码: {kill_exit_status}")
+        
+        # 等待一下让进程完全停止
+        stdin, stdout, stderr = ssh.exec_command("sleep 2")
+        stdout.channel.recv_exit_status()
+        
+        stdin, stdout, stderr = ssh.exec_command("sudo systemctl start frpc")
+        start_exit_status = stdout.channel.recv_exit_status()
+        
+        if start_exit_status == 0:
+            stdin, stdout, stderr = ssh.exec_command("sudo systemctl is-active frpc")
+            service_status = stdout.read().decode('utf-8').strip()
+            if service_status == "active":
+                logger.info("方法3成功: 服务已重启并运行")
+                return True
+        
+        # 方法4: 检查是否需要启用服务
+        logger.info("尝试方法4: 启用并启动服务")
+        stdin, stdout, stderr = ssh.exec_command("sudo systemctl enable frpc")
+        enable_exit_status = stdout.channel.recv_exit_status()
+        logger.info(f"启用服务退出码: {enable_exit_status}")
+        
+        stdin, stdout, stderr = ssh.exec_command("sudo systemctl start frpc")
+        start_exit_status = stdout.channel.recv_exit_status()
+        
+        if start_exit_status == 0:
+            stdin, stdout, stderr = ssh.exec_command("sudo systemctl is-active frpc")
+            service_status = stdout.read().decode('utf-8').strip()
+            if service_status == "active":
+                logger.info("方法4成功: 服务已启用并启动")
+                return True
+        
+        # 如果所有方法都失败，输出详细的诊断信息
+        logger.error("所有备选方法都失败了，输出诊断信息:")
+        
+        # 检查服务文件是否存在
+        stdin, stdout, stderr = ssh.exec_command("ls -la /etc/systemd/system/frpc.service /usr/lib/systemd/system/frpc.service")
+        service_files = stdout.read().decode('utf-8')
+        logger.error(f"服务文件检查: {service_files}")
+        
+        # 检查frpc可执行文件
+        stdin, stdout, stderr = ssh.exec_command("which frpc")
+        frpc_path = stdout.read().decode('utf-8').strip()
+        logger.error(f"frpc可执行文件路径: {frpc_path}")
+        
+        # 检查配置文件
+        stdin, stdout, stderr = ssh.exec_command(f"ls -la {REMOTE_CONFIG_PATH}")
+        config_file = stdout.read().decode('utf-8')
+        logger.error(f"配置文件检查: {config_file}")
+        
+        # 获取最新的服务日志
+        stdin, stdout, stderr = ssh.exec_command("sudo journalctl -u frpc -n 20 --no-pager")
+        service_logs = stdout.read().decode('utf-8')
+        logger.error(f"frpc服务日志: {service_logs}")
+        
+        return False
+        
+    except Exception as e:
+        logger.error(f"备选重启方法失败: {e}")
+        return False
+
+def get_remote_frpc_service_info():
+    """获取远程frpc服务的详细信息"""
+    if not PARAMIKO_AVAILABLE:
+        return None
+        
+    ssh = create_ssh_client()
+    if not ssh:
+        return None
+    
+    try:
+        info = {}
+        
+        # 检查服务状态
+        stdin, stdout, stderr = ssh.exec_command("sudo systemctl status frpc")
+        info['status'] = stdout.read().decode('utf-8')
+        
+        # 检查服务是否启用
+        stdin, stdout, stderr = ssh.exec_command("sudo systemctl is-enabled frpc")
+        info['enabled'] = stdout.read().decode('utf-8').strip()
+        
+        # 检查服务是否运行
+        stdin, stdout, stderr = ssh.exec_command("sudo systemctl is-active frpc")
+        info['active'] = stdout.read().decode('utf-8').strip()
+        
+        # 检查服务文件是否存在
+        stdin, stdout, stderr = ssh.exec_command("ls -la /etc/systemd/system/frpc.service /usr/lib/systemd/system/frpc.service 2>/dev/null")
+        info['service_files'] = stdout.read().decode('utf-8')
+        
+        # 检查frpc可执行文件
+        stdin, stdout, stderr = ssh.exec_command("which frpc")
+        frpc_path = stdout.read().decode('utf-8').strip()
+        if frpc_path:
+            info['frpc_path'] = frpc_path
+            # 检查frpc版本
+            stdin, stdout, stderr = ssh.exec_command("frpc --version")
+            info['frpc_version'] = stdout.read().decode('utf-8').strip()
+        else:
+            info['frpc_path'] = "frpc可执行文件未找到"
+            info['frpc_version'] = "无法获取版本信息"
+        
+        # 检查配置文件
+        stdin, stdout, stderr = ssh.exec_command(f"ls -la {REMOTE_CONFIG_PATH}")
+        exit_status = stdout.channel.recv_exit_status()
+        if exit_status == 0:
+            info['config_file'] = stdout.read().decode('utf-8')
+            # 检查配置文件内容的前几行
+            stdin, stdout, stderr = ssh.exec_command(f"head -10 {REMOTE_CONFIG_PATH}")
+            info['config_preview'] = stdout.read().decode('utf-8')
+        else:
+            info['config_file'] = "配置文件不存在"
+            info['config_preview'] = "无法预览配置文件"
+        
+        # 检查进程
+        stdin, stdout, stderr = ssh.exec_command("ps aux | grep frpc | grep -v grep")
+        info['processes'] = stdout.read().decode('utf-8')
+        
+        # 获取服务日志
+        stdin, stdout, stderr = ssh.exec_command("sudo journalctl -u frpc -n 10 --no-pager")
+        info['logs'] = stdout.read().decode('utf-8')
+        
+        return info
+        
+    except Exception as e:
+        logger.error(f"获取远程服务信息失败: {e}")
+        return None
     finally:
         ssh.close()
 
