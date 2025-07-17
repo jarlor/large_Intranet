@@ -127,17 +127,25 @@ async def read_root(request: Request, username: str = Depends(verify_session), s
     # 处理配置读取失败的情况
     if frpc_config is None:
         logger.error(f"无法读取 {server} 服务器的配置文件")
-        # 提供默认配置
-        server_config = {
-            "serverAddr": "配置读取失败",
-            "serverPort": "N/A"
-        }
+        if server == "remote":
+            # 提供远程服务器连接失败的详细信息
+            server_config = {
+                "serverAddr": "远程服务器连接失败 (127.0.0.1:3322)",
+                "serverPort": "请检查SSH连接配置"
+            }
+        else:
+            # 提供本地配置读取失败的信息
+            server_config = {
+                "serverAddr": "本地配置读取失败",
+                "serverPort": "请检查配置文件路径"
+            }
     else:
         # 提取简化的服务器配置信息，不包含webServer相关字段
         server_config = {
             "serverAddr": frpc_config.get("serverAddr", "未配置"),
             "serverPort": frpc_config.get("serverPort", "未配置")
         }
+        logger.info(f"成功读取 {server} 服务器配置: {server_config}")
 
     # 获取 Tailscale IP 列表
     tailscale_ips = get_tailscale_ips()
@@ -153,6 +161,31 @@ async def read_root(request: Request, username: str = Depends(verify_session), s
             "current_server": server,
         },
     )
+
+# 添加测试远程连接的路由
+@app.get("/api/test_remote_connection")
+async def test_remote_connection(username: str = Depends(verify_session)):
+    """测试远程服务器连接"""
+    try:
+        from config import create_ssh_client
+        
+        ssh = create_ssh_client()
+        if ssh:
+            ssh.close()
+            return JSONResponse({
+                "success": True,
+                "message": "远程服务器连接成功"
+            })
+        else:
+            return JSONResponse({
+                "success": False,
+                "message": "无法连接到远程服务器 (127.0.0.1:3322)"
+            })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "message": f"连接测试失败: {str(e)}"
+        })
 
 # 添加保存并重启服务的路由
 @app.post("/save_restart")
