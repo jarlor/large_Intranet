@@ -258,6 +258,22 @@ async def update_proxy(
     success = config.update_proxy(name, proxy, server)
     if not success:
         raise HTTPException(status_code=400, detail="Failed to update proxy or proxy not found")
+    
+    # 重启对应的服务
+    try:
+        if server == "remote":
+            restart_success = config.restart_remote_frpc()
+            if not restart_success:
+                logger.warning("更新代理后重启远程服务失败")
+        else:
+            subprocess.run(["sudo", "systemctl", "restart", "frpc"], 
+                          capture_output=True, text=True, check=True)
+            logger.info(f"代理 {proxy_name} 更新后本地服务已重启")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"更新代理后重启本地服务失败: {e}")
+    except Exception as e:
+        logger.error(f"更新代理后重启服务时发生错误: {e}")
+    
     return RedirectResponse(url=f"/?server={server}", status_code=303)
 
 @app.get("/proxy/delete/{name}")
