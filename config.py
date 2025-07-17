@@ -80,6 +80,15 @@ def read_remote_config():
         
         if result.returncode != 0:
             logger.error(f"下载远程配置文件失败: {result.stderr}")
+            # 清理临时文件
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+            return None
+        
+        # 检查文件是否为空
+        if os.path.getsize(temp_path) == 0:
+            logger.error("远程配置文件为空")
+            os.unlink(temp_path)
             return None
         
         # 读取配置文件
@@ -204,6 +213,16 @@ def read_config(server="local"):
     if server == "remote":
         return read_remote_config()
     try:
+        # 检查本地配置文件是否存在
+        if not os.path.exists(CONFIG_PATH):
+            logger.error(f"本地配置文件不存在: {CONFIG_PATH}")
+            return None
+        
+        # 检查文件是否为空
+        if os.path.getsize(CONFIG_PATH) == 0:
+            logger.error(f"本地配置文件为空: {CONFIG_PATH}")
+            return None
+        
         with open(CONFIG_PATH, "rb") as f:
             config_data = tomli.load(f)
             
@@ -216,7 +235,7 @@ def read_config(server="local"):
         
         return config
     except Exception as e:
-        print(f"读取配置出错: {e}")
+        logger.error(f"读取本地配置出错: {e}")
         return None
 
 def write_config(config_data, server="local"):
@@ -235,19 +254,21 @@ def write_config(config_data, server="local"):
         
 def get_proxies(server="local"):
     config = read_config(server)
-    if config:
-        proxies = config.get("proxies", [])
-        # 添加状态信息，根据端口号判断是否禁用
-        for proxy in proxies:
-            # 确保 remotePort 是整数
-            try:
-                remote_port = int(proxy.get("remotePort", 0))
-            except (ValueError, TypeError):
-                remote_port = 0
-                
-            proxy["status"] = "disabled" if remote_port <= 0 else "enabled"
-        return proxies
-    return []
+    if config is None:
+        logger.warning(f"无法读取 {server} 服务器配置，返回空代理列表")
+        return []
+    
+    proxies = config.get("proxies", [])
+    # 添加状态信息，根据端口号判断是否禁用
+    for proxy in proxies:
+        # 确保 remotePort 是整数
+        try:
+            remote_port = int(proxy.get("remotePort", 0))
+        except (ValueError, TypeError):
+            remote_port = 0
+            
+        proxy["status"] = "disabled" if remote_port <= 0 else "enabled"
+    return proxies
 
 def add_proxy(proxy, server="local"):
     config = read_config(server)

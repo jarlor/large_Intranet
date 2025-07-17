@@ -124,11 +124,20 @@ async def read_root(request: Request, username: str = Depends(verify_session), s
     proxies = config.get_proxies(server)
     frpc_config = config.read_config(server)
     
-    # 提取简化的服务器配置信息，不包含webServer相关字段
-    server_config = {
-        "serverAddr": frpc_config.get("serverAddr", ""),
-        "serverPort": frpc_config.get("serverPort", "")
-    }
+    # 处理配置读取失败的情况
+    if frpc_config is None:
+        logger.error(f"无法读取 {server} 服务器的配置文件")
+        # 提供默认配置
+        server_config = {
+            "serverAddr": "配置读取失败",
+            "serverPort": "N/A"
+        }
+    else:
+        # 提取简化的服务器配置信息，不包含webServer相关字段
+        server_config = {
+            "serverAddr": frpc_config.get("serverAddr", "未配置"),
+            "serverPort": frpc_config.get("serverPort", "未配置")
+        }
 
     # 获取 Tailscale IP 列表
     tailscale_ips = get_tailscale_ips()
