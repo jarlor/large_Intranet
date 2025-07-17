@@ -14,10 +14,17 @@ CONFIG_PATH = "/opt/frp/frpc.toml"
 PORT_MAPPING_PATH = "/opt/frp/port_mapping.json"
 PORT_MAPPING = {}
 
-# 远程服务器配置
-REMOTE_SERVER = "100.66.95.34"
+# 远程服务器配置 - 使用本机地址的3322端口
+REMOTE_SERVER = "127.0.0.1"
+REMOTE_PORT = "3322"
 REMOTE_CONFIG_PATH = "/opt/frpc/frpc.toml"
 REMOTE_PORT_MAPPING_PATH = "/opt/frpc/port_mapping.json"
+
+# 从环境变量获取SSH认证信息
+def get_ssh_credentials():
+    username = os.getenv('SSH_REMOTE_USER', 'root')
+    password = os.getenv('SSH_REMOTE_PASSWORD', '')
+    return username, password
 
 # 从文件中加载端口映射
 def load_port_mapping():
@@ -55,7 +62,26 @@ PORT_MAPPING = load_port_mapping()
 def execute_remote_command(command, capture_output=True):
     """执行远程命令"""
     try:
-        full_command = ["ssh", REMOTE_SERVER, command]
+        username, password = get_ssh_credentials()
+        
+        if password:
+            # 使用sshpass进行密码认证
+            full_command = [
+                "sshpass", "-p", password, 
+                "ssh", "-p", REMOTE_PORT, 
+                "-o", "StrictHostKeyChecking=no",
+                f"{username}@{REMOTE_SERVER}", 
+                command
+            ]
+        else:
+            # 使用密钥认证
+            full_command = [
+                "ssh", "-p", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                f"{username}@{REMOTE_SERVER}", 
+                command
+            ]
+        
         result = subprocess.run(
             full_command,
             capture_output=capture_output,
@@ -70,12 +96,29 @@ def execute_remote_command(command, capture_output=True):
 def read_remote_config():
     """读取远程服务器配置"""
     try:
+        username, password = get_ssh_credentials()
+        
         # 使用临时文件
         with tempfile.NamedTemporaryFile(mode='w+b', delete=False) as temp_file:
             temp_path = temp_file.name
         
         # 从远程服务器下载配置文件
-        scp_command = ["scp", f"{REMOTE_SERVER}:{REMOTE_CONFIG_PATH}", temp_path]
+        if password:
+            scp_command = [
+                "sshpass", "-p", password,
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                f"{username}@{REMOTE_SERVER}:{REMOTE_CONFIG_PATH}", 
+                temp_path
+            ]
+        else:
+            scp_command = [
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                f"{username}@{REMOTE_SERVER}:{REMOTE_CONFIG_PATH}", 
+                temp_path
+            ]
+        
         result = subprocess.run(scp_command, capture_output=True, text=True)
         
         if result.returncode != 0:
@@ -113,6 +156,8 @@ def read_remote_config():
 def write_remote_config(config_data):
     """写入远程服务器配置"""
     try:
+        username, password = get_ssh_credentials()
+        
         # 使用临时文件
         with tempfile.NamedTemporaryFile(mode='w+b', delete=False) as temp_file:
             temp_path = temp_file.name
@@ -122,7 +167,22 @@ def write_remote_config(config_data):
         execute_remote_command(f"sudo mkdir -p {os.path.dirname(REMOTE_CONFIG_PATH)}")
         
         # 上传配置文件到远程服务器
-        scp_command = ["scp", temp_path, f"{REMOTE_SERVER}:{REMOTE_CONFIG_PATH}"]
+        if password:
+            scp_command = [
+                "sshpass", "-p", password,
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                temp_path, 
+                f"{username}@{REMOTE_SERVER}:{REMOTE_CONFIG_PATH}"
+            ]
+        else:
+            scp_command = [
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                temp_path, 
+                f"{username}@{REMOTE_SERVER}:{REMOTE_CONFIG_PATH}"
+            ]
+        
         result = subprocess.run(scp_command, capture_output=True, text=True)
         
         # 清理临时文件
@@ -140,6 +200,8 @@ def write_remote_config(config_data):
 def load_remote_port_mapping():
     """从远程服务器加载端口映射"""
     try:
+        username, password = get_ssh_credentials()
+        
         # 检查远程文件是否存在
         check_result = execute_remote_command(f"test -f {REMOTE_PORT_MAPPING_PATH}")
         if check_result is None:
@@ -150,7 +212,22 @@ def load_remote_port_mapping():
             temp_path = temp_file.name
         
         # 从远程服务器下载端口映射文件
-        scp_command = ["scp", f"{REMOTE_SERVER}:{REMOTE_PORT_MAPPING_PATH}", temp_path]
+        if password:
+            scp_command = [
+                "sshpass", "-p", password,
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                f"{username}@{REMOTE_SERVER}:{REMOTE_PORT_MAPPING_PATH}", 
+                temp_path
+            ]
+        else:
+            scp_command = [
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                f"{username}@{REMOTE_SERVER}:{REMOTE_PORT_MAPPING_PATH}", 
+                temp_path
+            ]
+        
         result = subprocess.run(scp_command, capture_output=True, text=True)
         
         if result.returncode != 0:
@@ -179,6 +256,8 @@ def load_remote_port_mapping():
 def save_remote_port_mapping(mapping):
     """将端口映射保存到远程服务器"""
     try:
+        username, password = get_ssh_credentials()
+        
         # 使用临时文件
         with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
             temp_path = temp_file.name
@@ -188,7 +267,22 @@ def save_remote_port_mapping(mapping):
         execute_remote_command(f"sudo mkdir -p {os.path.dirname(REMOTE_PORT_MAPPING_PATH)}")
         
         # 上传映射文件到远程服务器
-        scp_command = ["scp", temp_path, f"{REMOTE_SERVER}:{REMOTE_PORT_MAPPING_PATH}"]
+        if password:
+            scp_command = [
+                "sshpass", "-p", password,
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                temp_path, 
+                f"{username}@{REMOTE_SERVER}:{REMOTE_PORT_MAPPING_PATH}"
+            ]
+        else:
+            scp_command = [
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                temp_path, 
+                f"{username}@{REMOTE_SERVER}:{REMOTE_PORT_MAPPING_PATH}"
+            ]
+        
         result = subprocess.run(scp_command, capture_output=True, text=True)
         
         # 清理临时文件

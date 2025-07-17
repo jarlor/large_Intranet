@@ -16,7 +16,7 @@
                     <label class="mr-2 text-sm font-medium">服务器:</label>
                     <select id="serverSelect" class="border rounded px-3 py-1">
                         <option value="local" {{ 'selected' if current_server == 'local' else '' }}>本地&Tailscale 服务器</option>
-                        <option value="remote" {{ 'selected' if current_server == 'remote' else '' }}>远程服务器 (100.66.95.34)</option>
+                        <option value="remote" {{ 'selected' if current_server == 'remote' else '' }}>远程服务器 (127.0.0.1:3322)</option>
                     </select>
                 </div>
                 <span class="text-sm">欢迎，{{ username }}</span>
@@ -27,7 +27,7 @@
         <!-- 服务器配置信息 -->
         <div class="bg-white p-4 mb-6 rounded shadow">
             <h2 class="text-xl font-semibold mb-3">服务器配置 
-                <span class="text-sm text-gray-600">({{ '本地&Tailscale 服务器' if current_server == 'local' else '远程服务器 - 100.66.95.34' }})</span>
+                <span class="text-sm text-gray-600">({{ '本地&Tailscale 服务器' if current_server == 'local' else '远程服务器 - 127.0.0.1:3322' }})</span>
             </h2>
             <div class="grid grid-cols-2 gap-4">
                 <div>
@@ -300,7 +300,7 @@
                 }
                 throw new Error('服务器错误');
             })
-            .then(data => {
+            .then data => {
                 if(data.success) {
                     alert('配置已保存，服务已重启');
                 } else {
