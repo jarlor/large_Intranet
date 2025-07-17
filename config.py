@@ -19,9 +19,9 @@ CONFIG_PATH = "/opt/frp/frpc.toml"
 PORT_MAPPING_PATH = "/opt/frp/port_mapping.json"
 PORT_MAPPING = {}
 
-# 远程服务器配置 - 使用本机地址的3322端口
-REMOTE_SERVER = "127.0.0.1"
-REMOTE_PORT = 3322
+# 远程服务器配置 - 使用Tailscale IP地址
+REMOTE_SERVER = "100.66.95.34"
+REMOTE_PORT = 22
 REMOTE_CONFIG_PATH = "/opt/frpc/frpc.toml"
 REMOTE_PORT_MAPPING_PATH = "/opt/frpc/port_mapping.json"
 

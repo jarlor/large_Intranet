@@ -130,7 +130,7 @@ async def read_root(request: Request, username: str = Depends(verify_session), s
         if server == "remote":
             # 提供远程服务器连接失败的详细信息
             server_config = {
-                "serverAddr": "远程服务器连接失败 (127.0.0.1:3322)",
+                "serverAddr": "远程服务器连接失败 (100.66.95.34)",
                 "serverPort": "请检查SSH连接配置"
             }
         else:
@@ -179,7 +179,7 @@ async def test_remote_connection(username: str = Depends(verify_session)):
         else:
             return JSONResponse({
                 "success": False,
-                "message": "无法连接到远程服务器 (127.0.0.1:3322)"
+                "message": "无法连接到远程服务器 (100.66.95.34)"
             })
     except Exception as e:
         return JSONResponse({
