@@ -6,8 +6,6 @@ from models import FrpcConfig, Proxy
 import logging
 import subprocess
 import tempfile
-import paramiko
-from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +16,7 @@ PORT_MAPPING = {}
 
 # 远程服务器配置 - 使用本机地址的3322端口
 REMOTE_SERVER = "127.0.0.1"
-REMOTE_PORT = 3322
+REMOTE_PORT = "3322"
 REMOTE_CONFIG_PATH = "/opt/frpc/frpc.toml"
 REMOTE_PORT_MAPPING_PATH = "/opt/frpc/port_mapping.json"
 
@@ -28,90 +26,120 @@ def get_ssh_credentials():
     password = os.getenv('SSH_REMOTE_PASSWORD', '')
     return username, password
 
-def create_ssh_client():
-    """创建SSH客户端连接"""
-    try:
-        username, password = get_ssh_credentials()
-        
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        
-        if password:
-            ssh.connect(
-                hostname=REMOTE_SERVER,
-                port=REMOTE_PORT,
-                username=username,
-                password=password,
-                timeout=10
-            )
-        else:
-            # 使用密钥认证
-            ssh.connect(
-                hostname=REMOTE_SERVER,
-                port=REMOTE_PORT,
-                username=username,
-                timeout=10
-            )
-        
-        return ssh
-    except Exception as e:
-        logger.error(f"创建SSH连接失败: {e}")
-        return None
+# 从文件中加载端口映射
+def load_port_mapping():
+    if os.path.exists(PORT_MAPPING_PATH):
+        try:
+            with open(PORT_MAPPING_PATH, 'r') as f:
+                mapping = json.load(f)
+                # 确保所有键和值都是正确的类型
+                result = {}
+                for k, v in mapping.items():
+                    try:
+                        result[k] = int(v)
+                    except (ValueError, TypeError):
+                        pass
+                return result
+        except Exception as e:
+            logger.error(f"加载端口映射出错: {e}")
+    return {}
 
-# ...existing code...
+# 将端口映射保存到文件
+def save_port_mapping(mapping):
+    try:
+        # 确保目录存在
+        os.makedirs(os.path.dirname(PORT_MAPPING_PATH), exist_ok=True)
+        with open(PORT_MAPPING_PATH, 'w') as f:
+            json.dump(mapping, f)
+        return True
+    except Exception as e:
+        logger.error(f"保存端口映射出错: {e}")
+        return False
+
+# 初始化加载端口映射
+PORT_MAPPING = load_port_mapping()
 
 def execute_remote_command(command, capture_output=True):
     """执行远程命令"""
-    ssh = create_ssh_client()
-    if not ssh:
-        return None
-    
     try:
-        stdin, stdout, stderr = ssh.exec_command(command)
+        username, password = get_ssh_credentials()
         
-        if capture_output:
-            output = stdout.read().decode('utf-8')
-            error = stderr.read().decode('utf-8')
-            
-            if error:
-                logger.error(f"远程命令执行错误: {error}")
-                return None
-            
-            return output
+        if password:
+            # 使用sshpass进行密码认证
+            full_command = [
+                "sshpass", "-p", password, 
+                "ssh", "-p", REMOTE_PORT, 
+                "-o", "StrictHostKeyChecking=no",
+                f"{username}@{REMOTE_SERVER}", 
+                command
+            ]
         else:
-            # 等待命令完成
-            exit_status = stdout.channel.recv_exit_status()
-            return exit_status == 0
-    except Exception as e:
+            # 使用密钥认证
+            full_command = [
+                "ssh", "-p", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                f"{username}@{REMOTE_SERVER}", 
+                command
+            ]
+        
+        result = subprocess.run(
+            full_command,
+            capture_output=capture_output,
+            text=True,
+            check=True
+        )
+        return result.stdout if capture_output else True
+    except subprocess.CalledProcessError as e:
         logger.error(f"远程命令执行失败: {e}")
         return None
-    finally:
-        ssh.close()
 
 def read_remote_config():
     """读取远程服务器配置"""
-    ssh = create_ssh_client()
-    if not ssh:
-        logger.error("无法建立SSH连接")
-        return None
-    
     try:
-        # 检查远程配置文件是否存在
-        stdin, stdout, stderr = ssh.exec_command(f"test -f {REMOTE_CONFIG_PATH}")
-        if stdout.channel.recv_exit_status() != 0:
-            logger.error(f"远程配置文件不存在: {REMOTE_CONFIG_PATH}")
+        username, password = get_ssh_credentials()
+        
+        # 使用临时文件
+        with tempfile.NamedTemporaryFile(mode='w+b', delete=False) as temp_file:
+            temp_path = temp_file.name
+        
+        # 从远程服务器下载配置文件
+        if password:
+            scp_command = [
+                "sshpass", "-p", password,
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                f"{username}@{REMOTE_SERVER}:{REMOTE_CONFIG_PATH}", 
+                temp_path
+            ]
+        else:
+            scp_command = [
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                f"{username}@{REMOTE_SERVER}:{REMOTE_CONFIG_PATH}", 
+                temp_path
+            ]
+        
+        result = subprocess.run(scp_command, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            logger.error(f"下载远程配置文件失败: {result.stderr}")
+            # 清理临时文件
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
             return None
         
-        # 读取远程配置文件
-        stdin, stdout, stderr = ssh.exec_command(f"cat {REMOTE_CONFIG_PATH}")
-        config_content = stdout.read()
-        
-        if not config_content:
+        # 检查文件是否为空
+        if os.path.getsize(temp_path) == 0:
             logger.error("远程配置文件为空")
+            os.unlink(temp_path)
             return None
         
-        # 解析配置文件
-        config_data = tomli.loads(config_content.decode('utf-8'))
+        # 读取配置文件
+        with open(temp_path, "rb") as f:
+            config_data = tomli.load(f)
+        
+        # 清理临时文件
+        os.unlink(temp_path)
         
         # 转换配置到我们的模型
         config = {
@@ -120,71 +148,98 @@ def read_remote_config():
             "proxies": config_data.get("proxies", [])
         }
         
-        logger.info(f"成功读取远程配置，包含 {len(config.get('proxies', []))} 个代理")
         return config
-        
     except Exception as e:
         logger.error(f"读取远程配置出错: {e}")
         return None
-    finally:
-        ssh.close()
 
 def write_remote_config(config_data):
     """写入远程服务器配置"""
-    ssh = create_ssh_client()
-    if not ssh:
-        return False
-    
     try:
-        # 将配置转换为TOML格式
-        config_content = tomli_w.dumps(config_data)
+        username, password = get_ssh_credentials()
+        
+        # 使用临时文件
+        with tempfile.NamedTemporaryFile(mode='w+b', delete=False) as temp_file:
+            temp_path = temp_file.name
+            tomli_w.dump(config_data, temp_file)
         
         # 确保远程目录存在
-        ssh.exec_command(f"sudo mkdir -p {os.path.dirname(REMOTE_CONFIG_PATH)}")
+        execute_remote_command(f"sudo mkdir -p {os.path.dirname(REMOTE_CONFIG_PATH)}")
         
-        # 创建临时文件并写入配置
-        temp_remote_path = f"/tmp/frpc_config_{os.getpid()}.toml"
-        stdin, stdout, stderr = ssh.exec_command(f"cat > {temp_remote_path}")
-        stdin.write(config_content.encode('utf-8'))
-        stdin.close()
+        # 上传配置文件到远程服务器
+        if password:
+            scp_command = [
+                "sshpass", "-p", password,
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                temp_path, 
+                f"{username}@{REMOTE_SERVER}:{REMOTE_CONFIG_PATH}"
+            ]
+        else:
+            scp_command = [
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                temp_path, 
+                f"{username}@{REMOTE_SERVER}:{REMOTE_CONFIG_PATH}"
+            ]
         
-        # 移动临时文件到目标位置
-        stdin, stdout, stderr = ssh.exec_command(f"sudo mv {temp_remote_path} {REMOTE_CONFIG_PATH}")
-        exit_status = stdout.channel.recv_exit_status()
+        result = subprocess.run(scp_command, capture_output=True, text=True)
         
-        if exit_status != 0:
-            logger.error(f"写入远程配置文件失败: {stderr.read().decode('utf-8')}")
+        # 清理临时文件
+        os.unlink(temp_path)
+        
+        if result.returncode != 0:
+            logger.error(f"上传远程配置文件失败: {result.stderr}")
             return False
         
-        logger.info("成功写入远程配置文件")
         return True
-        
     except Exception as e:
         logger.error(f"写入远程配置出错: {e}")
         return False
-    finally:
-        ssh.close()
 
 def load_remote_port_mapping():
     """从远程服务器加载端口映射"""
-    ssh = create_ssh_client()
-    if not ssh:
-        return {}
-    
     try:
-        # 检查远程映射文件是否存在
-        stdin, stdout, stderr = ssh.exec_command(f"test -f {REMOTE_PORT_MAPPING_PATH}")
-        if stdout.channel.recv_exit_status() != 0:
+        username, password = get_ssh_credentials()
+        
+        # 检查远程文件是否存在
+        check_result = execute_remote_command(f"test -f {REMOTE_PORT_MAPPING_PATH}")
+        if check_result is None:
             return {}
         
-        # 读取远程映射文件
-        stdin, stdout, stderr = ssh.exec_command(f"cat {REMOTE_PORT_MAPPING_PATH}")
-        mapping_content = stdout.read().decode('utf-8')
+        # 使用临时文件
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
+            temp_path = temp_file.name
         
-        if not mapping_content.strip():
+        # 从远程服务器下载端口映射文件
+        if password:
+            scp_command = [
+                "sshpass", "-p", password,
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                f"{username}@{REMOTE_SERVER}:{REMOTE_PORT_MAPPING_PATH}", 
+                temp_path
+            ]
+        else:
+            scp_command = [
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                f"{username}@{REMOTE_SERVER}:{REMOTE_PORT_MAPPING_PATH}", 
+                temp_path
+            ]
+        
+        result = subprocess.run(scp_command, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            os.unlink(temp_path)
             return {}
         
-        mapping = json.loads(mapping_content)
+        # 读取映射文件
+        with open(temp_path, 'r') as f:
+            mapping = json.load(f)
+        
+        # 清理临时文件
+        os.unlink(temp_path)
         
         # 确保所有键和值都是正确的类型
         result = {}
@@ -194,67 +249,58 @@ def load_remote_port_mapping():
             except (ValueError, TypeError):
                 pass
         return result
-        
     except Exception as e:
         logger.error(f"加载远程端口映射出错: {e}")
         return {}
-    finally:
-        ssh.close()
 
 def save_remote_port_mapping(mapping):
     """将端口映射保存到远程服务器"""
-    ssh = create_ssh_client()
-    if not ssh:
-        return False
-    
     try:
-        # 将映射转换为JSON格式
-        mapping_content = json.dumps(mapping)
+        username, password = get_ssh_credentials()
+        
+        # 使用临时文件
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
+            temp_path = temp_file.name
+            json.dump(mapping, temp_file)
         
         # 确保远程目录存在
-        ssh.exec_command(f"sudo mkdir -p {os.path.dirname(REMOTE_PORT_MAPPING_PATH)}")
+        execute_remote_command(f"sudo mkdir -p {os.path.dirname(REMOTE_PORT_MAPPING_PATH)}")
         
-        # 创建临时文件并写入映射
-        temp_remote_path = f"/tmp/port_mapping_{os.getpid()}.json"
-        stdin, stdout, stderr = ssh.exec_command(f"cat > {temp_remote_path}")
-        stdin.write(mapping_content.encode('utf-8'))
-        stdin.close()
+        # 上传映射文件到远程服务器
+        if password:
+            scp_command = [
+                "sshpass", "-p", password,
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                temp_path, 
+                f"{username}@{REMOTE_SERVER}:{REMOTE_PORT_MAPPING_PATH}"
+            ]
+        else:
+            scp_command = [
+                "scp", "-P", REMOTE_PORT,
+                "-o", "StrictHostKeyChecking=no",
+                temp_path, 
+                f"{username}@{REMOTE_SERVER}:{REMOTE_PORT_MAPPING_PATH}"
+            ]
         
-        # 移动临时文件到目标位置
-        stdin, stdout, stderr = ssh.exec_command(f"sudo mv {temp_remote_path} {REMOTE_PORT_MAPPING_PATH}")
-        exit_status = stdout.channel.recv_exit_status()
+        result = subprocess.run(scp_command, capture_output=True, text=True)
         
-        return exit_status == 0
+        # 清理临时文件
+        os.unlink(temp_path)
         
+        return result.returncode == 0
     except Exception as e:
         logger.error(f"保存远程端口映射出错: {e}")
         return False
-    finally:
-        ssh.close()
 
 def restart_remote_frpc():
     """重启远程服务器的 frpc 服务"""
-    ssh = create_ssh_client()
-    if not ssh:
-        return False
-    
     try:
-        stdin, stdout, stderr = ssh.exec_command("sudo systemctl restart frpc")
-        exit_status = stdout.channel.recv_exit_status()
-        
-        if exit_status == 0:
-            logger.info("成功重启远程frpc服务")
-            return True
-        else:
-            error_msg = stderr.read().decode('utf-8')
-            logger.error(f"重启远程frpc服务失败: {error_msg}")
-            return False
-            
+        result = execute_remote_command("sudo systemctl restart frpc")
+        return result is not None
     except Exception as e:
         logger.error(f"重启远程 frpc 服务失败: {e}")
         return False
-    finally:
-        ssh.close()
 
 # 修改现有函数，添加服务器选择参数
 def read_config(server="local"):
@@ -412,52 +458,6 @@ def enable_proxy(name, server="local"):
             # 从映射中恢复原始端口号
             if server == "remote":
                 remote_mapping = load_remote_port_mapping()
-                original_port = remote_mapping.get(name)
-            else:
-                original_port = PORT_MAPPING.get(name)
-            
-            # 如果找到原始端口，则恢复它
-            if original_port is not None:
-                proxy["remotePort"] = original_port
-                return write_config(config, server)
-            else:
-                logger.error(f"找不到代理 {name} 的原始端口")
-                return False
-    
-    return False
-
-# 从文件中加载端口映射
-def load_port_mapping():
-    if os.path.exists(PORT_MAPPING_PATH):
-        try:
-            with open(PORT_MAPPING_PATH, 'r') as f:
-                mapping = json.load(f)
-                # 确保所有键和值都是正确的类型
-                result = {}
-                for k, v in mapping.items():
-                    try:
-                        result[k] = int(v)
-                    except (ValueError, TypeError):
-                        pass
-                return result
-        except Exception as e:
-            logger.error(f"加载端口映射出错: {e}")
-    return {}
-
-# 将端口映射保存到文件
-def save_port_mapping(mapping):
-    try:
-        # 确保目录存在
-        os.makedirs(os.path.dirname(PORT_MAPPING_PATH), exist_ok=True)
-        with open(PORT_MAPPING_PATH, 'w') as f:
-            json.dump(mapping, f)
-        return True
-    except Exception as e:
-        logger.error(f"保存端口映射出错: {e}")
-        return False
-
-# 初始化加载端口映射
-PORT_MAPPING = load_port_mapping()
                 original_port = remote_mapping.get(name)
             else:
                 original_port = PORT_MAPPING.get(name)
