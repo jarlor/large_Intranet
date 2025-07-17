@@ -320,10 +320,18 @@ async def update_proxy(
 
 @app.get("/proxy/delete/{name}")
 async def delete_proxy(name: str, username: str = Depends(verify_session), server: str = "local"):
-    success = config.delete_proxy(name, server)
-    if not success:
-        raise HTTPException(status_code=400, detail="Failed to delete proxy")
-    return RedirectResponse(url=f"/?server={server}", status_code=303)
+    try:
+        success = config.delete_proxy(name, server)
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to delete proxy")
+        
+        # 记录删除操作
+        logger.info(f"用户 {username} 删除了代理 {name} (服务器: {server})")
+        
+        return RedirectResponse(url=f"/?server={server}", status_code=303)
+    except Exception as e:
+        logger.error(f"删除代理 {name} 时出错: {e}")
+        raise HTTPException(status_code=500, detail=f"删除代理失败: {str(e)}")
 
 @app.get("/proxy/{name}")
 async def get_proxy(name: str, username: str = Depends(verify_session), server: str = "local"):

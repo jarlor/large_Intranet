@@ -87,11 +87,10 @@
                                         data-remoteport="{{ proxy.remotePort }}">
                                     编辑
                                 </button>
-                                <a href="/proxy/delete/{{ proxy.name }}" 
-                                   class="bg-red-500 hover:bg-red-600 text-white px-2 py-1 rounded"
-                                   onclick="return confirm('确定要删除此代理吗？')">
+                                <button class="delete-btn bg-red-500 hover:bg-red-600 text-white px-2 py-1 rounded"
+                                        data-name="{{ proxy.name }}">
                                     删除
-                                </a>
+                                </button>
                             </td>
                         </tr>
                         {% else %}
@@ -370,6 +369,46 @@
                     button.disabled = false;
                     button.textContent = action === 'enable' ? '开放端口' : '关闭端口';
                 });
+            });
+        });
+        
+        // 处理删除代理
+        document.querySelectorAll('.delete-btn').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                const proxyName = this.getAttribute('data-name');
+                const currentServer = document.getElementById('serverSelect').value;
+                
+                if (confirm(`确定要删除代理 "${proxyName}" 吗？`)) {
+                    // 显示删除进度
+                    this.disabled = true;
+                    this.textContent = '删除中...';
+                    
+                    // 发送删除请求
+                    fetch(`/proxy/delete/${proxyName}?server=${currentServer}`, {
+                        method: 'GET',
+                        headers: {
+                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        }
+                    })
+                    .then(response => {
+                        if (response.ok) {
+                            // 删除成功，刷新页面
+                            window.location.reload();
+                        } else {
+                            throw new Error('删除失败');
+                        }
+                    })
+                    .catch(error => {
+                        console.error('删除错误:', error);
+                        alert('删除失败: ' + error.message);
+                        // 恢复按钮状态
+                        this.disabled = false;
+                        this.textContent = '删除';
+                    });
+                }
             });
         });
     </script>
