@@ -8,17 +8,27 @@
 </head>
 <body class="bg-gray-100 min-h-screen">
     <div class="container mx-auto p-4">
-        <h1 class="text-2xl font-bold mb-6 text-center">FRP 配置管理</h1>
         <div class="flex justify-between items-center mb-6">
             <h1 class="text-2xl font-bold">FRP 配置管理</h1>
-            <div class="flex items-center">
-                <span class="mr-4">欢迎，{{ username }}</span>
+            <div class="flex items-center space-x-4">
+                <!-- 服务器选择 -->
+                <div class="flex items-center">
+                    <label class="mr-2 text-sm font-medium">服务器:</label>
+                    <select id="serverSelect" class="border rounded px-3 py-1">
+                        <option value="local" {{ 'selected' if current_server == 'local' else '' }}>本地服务器</option>
+                        <option value="remote" {{ 'selected' if current_server == 'remote' else '' }}>远程服务器 (100.66.95.34)</option>
+                    </select>
+                </div>
+                <span class="text-sm">欢迎，{{ username }}</span>
                 <a href="/logout" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded">退出登录</a>
             </div>
         </div>
+        
         <!-- 服务器配置信息 -->
         <div class="bg-white p-4 mb-6 rounded shadow">
-            <h2 class="text-xl font-semibold mb-3">服务器配置</h2>
+            <h2 class="text-xl font-semibold mb-3">服务器配置 
+                <span class="text-sm text-gray-600">({{ '本地' if current_server == 'local' else '远程 - 100.66.95.34' }})</span>
+            </h2>
             <div class="grid grid-cols-2 gap-4">
                 <div>
                     <p><strong>服务器地址:</strong> {{ config.serverAddr }}</p>
@@ -100,6 +110,7 @@
         <div class="bg-white p-6 rounded shadow-lg w-full max-w-md">
             <h3 class="text-xl font-semibold mb-4">添加代理</h3>
             <form action="/proxy/add" method="post">
+                <input type="hidden" name="server" id="addFormServer" value="{{ current_server }}">
                 <div class="mb-4">
                     <label class="block text-sm font-medium mb-1">名称</label>
                     <input type="text" name="name" required class="w-full p-2 border rounded">
@@ -143,6 +154,7 @@
         <div class="bg-white p-6 rounded shadow-lg w-full max-w-md">
             <h3 class="text-xl font-semibold mb-4">编辑代理</h3>
             <form id="editForm" action="" method="post">
+                <input type="hidden" name="server" id="editFormServer" value="{{ current_server }}">
                 <div class="mb-4">
                     <label class="block text-sm font-medium mb-1">名称</label>
                     <input id="edit-name" type="text" name="proxy_name" required class="w-full p-2 border rounded">
@@ -182,8 +194,15 @@
     </div>
 
     <script>
+        // 服务器选择变更处理
+        document.getElementById('serverSelect').addEventListener('change', function() {
+            const selectedServer = this.value;
+            window.location.href = `/?server=${selectedServer}`;
+        });
+
         // 显示添加代理模态框
         document.getElementById('addProxyBtn').addEventListener('click', function() {
+            document.getElementById('addFormServer').value = document.getElementById('serverSelect').value;
             document.getElementById('addProxyModal').classList.remove('hidden');
         });
 
@@ -206,6 +225,9 @@
                 
                 document.getElementById('edit-name').value = name;
                 document.getElementById('edit-type').value = type;
+                document.getElementById('edit-localport').value = localPort;
+                document.getElementById('edit-remoteport').value = remotePort;
+                document.getElementById('editFormServer').value = document.getElementById('serverSelect').value;
                 
                 // 设置IP下拉框的选中值
                 const ipSelect = document.getElementById('edit-localip');
@@ -226,9 +248,7 @@
                     ipSelect.value = localIP;
                 }
                 
-                document.getElementById('edit-localport').value = localPort;
-                document.getElementById('edit-remoteport').value = remotePort;
-                
+                const currentServer = document.getElementById('serverSelect').value;
                 document.getElementById('editForm').action = `/proxy/update/${name}`;
                 document.getElementById('editProxyModal').classList.remove('hidden');
             });
@@ -240,9 +260,15 @@
             this.textContent = '正在保存...';
             this.disabled = true;
             
+            const currentServer = document.getElementById('serverSelect').value;
+            
             // 调用保存API
             fetch('/save_restart', {
                 method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `server=${currentServer}`
             })
             .then(response => {
                 if(response.ok) {
@@ -271,11 +297,12 @@
         document.querySelectorAll('.toggle-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 const proxyName = this.getAttribute('data-name');
-                const action = this.getAttribute('data-action'); // enable 或 disable
+                const action = this.getAttribute('data-action');
                 const button = this;
+                const currentServer = document.getElementById('serverSelect').value;
                 
                 const statusText = action === 'enable' ? '开放端口' : '关闭端口';
-                console.log(`尝试${statusText}，代理: ${proxyName}`);
+                console.log(`尝试${statusText}，代理: ${proxyName}，服务器: ${currentServer}`);
                 
                 // 禁用按钮，显示加载状态
                 button.disabled = true;
@@ -285,8 +312,10 @@
                 fetch(`/api/proxy/${proxyName}/${action}`, {
                     method: 'POST',
                     headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
                         'Accept': 'application/json',
-                    }
+                    },
+                    body: `server=${currentServer}`
                 })
                 .then(response => {
                     console.log(`API响应状态: ${response.status}`);

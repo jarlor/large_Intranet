@@ -120,9 +120,9 @@ async def http_exception_handler(request, exc):
     )
 
 @app.get("/", response_class=HTMLResponse)
-async def read_root(request: Request, username: str = Depends(verify_session)):
-    proxies = config.get_proxies()
-    frpc_config = config.read_config()
+async def read_root(request: Request, username: str = Depends(verify_session), server: str = "local"):
+    proxies = config.get_proxies(server)
+    frpc_config = config.read_config(server)
     
     # 提取简化的服务器配置信息，不包含webServer相关字段
     server_config = {
@@ -141,20 +141,30 @@ async def read_root(request: Request, username: str = Depends(verify_session)):
             "config": server_config,
             "tailscale_ips": tailscale_ips,
             "username": username,
+            "current_server": server,
         },
     )
 
 # 添加保存并重启服务的路由
 @app.post("/save_restart")
-async def save_restart(username: str = Depends(verify_session)):
+async def save_restart(username: str = Depends(verify_session), server: str = Form("local")):
     try:
-        # 重启 frpc 服务
-        result = subprocess.run(
-            ["sudo", "systemctl", "restart", "frpc"], 
-            capture_output=True, 
-            text=True, 
-            check=True
-        )
+        if server == "remote":
+            # 重启远程 frpc 服务
+            success = config.restart_remote_frpc()
+            if not success:
+                return JSONResponse({
+                    "success": False,
+                    "message": "重启远程服务失败"
+                }, status_code=500)
+        else:
+            # 重启本地 frpc 服务
+            result = subprocess.run(
+                ["sudo", "systemctl", "restart", "frpc"], 
+                capture_output=True, 
+                text=True, 
+                check=True
+            )
         
         return JSONResponse({
             "success": True,
@@ -179,6 +189,7 @@ async def add_proxy(
     local_ip: str = Form(...),
     local_port: int = Form(...),
     remote_port: int = Form(...),
+    server: str = Form("local"),
 ):
     # 创建代理对象
     proxy = Proxy(
@@ -197,12 +208,12 @@ async def add_proxy(
         logger.warning(f"无法在阿里云安全组中开放端口 {remote_port}，但将继续创建代理")
 
     # 添加代理配置
-    success = config.add_proxy(proxy)
+    success = config.add_proxy(proxy, server)
     if not success:
         raise HTTPException(
             status_code=400, detail="Failed to add proxy or proxy with same name exists"
         )
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url=f"/?server={server}", status_code=303)
 
 @app.post("/proxy/update/{name}")
 async def update_proxy(
@@ -213,11 +224,12 @@ async def update_proxy(
     local_ip: str = Form(...),
     local_port: int = Form(...),
     remote_port: int = Form(...),
+    server: str = Form("local"),
 ):
     # 获取原始代理配置，检查是否修改了端口
     original_proxy = None
     try:
-        original_proxy = await get_proxy(name, username)
+        original_proxy = await get_proxy(name, username, server)
     except HTTPException:
         pass
     
@@ -243,30 +255,30 @@ async def update_proxy(
             logger.warning(f"无法在阿里云安全组中开放端口 {remote_port}，但将继续更新代理")
     
     # 更新代理配置
-    success = config.update_proxy(name, proxy)
+    success = config.update_proxy(name, proxy, server)
     if not success:
         raise HTTPException(status_code=400, detail="Failed to update proxy or proxy not found")
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url=f"/?server={server}", status_code=303)
 
 @app.get("/proxy/delete/{name}")
-async def delete_proxy(name: str, username: str = Depends(verify_session)):
-    success = config.delete_proxy(name)
+async def delete_proxy(name: str, username: str = Depends(verify_session), server: str = "local"):
+    success = config.delete_proxy(name, server)
     if not success:
         raise HTTPException(status_code=400, detail="Failed to delete proxy")
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url=f"/?server={server}", status_code=303)
 
 @app.get("/proxy/{name}")
-async def get_proxy(name: str, username: str = Depends(verify_session)):
-    proxies = config.get_proxies()
+async def get_proxy(name: str, username: str = Depends(verify_session), server: str = "local"):
+    proxies = config.get_proxies(server)
     for proxy in proxies:
         if proxy.get("name") == name:
             return proxy
     raise HTTPException(status_code=404, detail="Proxy not found")
 
 @app.post("/api/proxy/{name}/enable")
-async def enable_proxy_route(name: str, username: str = Depends(verify_session)):
+async def enable_proxy_route(name: str, username: str = Depends(verify_session), server: str = Form("local")):
     # 先检查代理是否存在
-    proxies = config.get_proxies()
+    proxies = config.get_proxies(server)
     proxy = None
     
     for p in proxies:
@@ -290,9 +302,14 @@ async def enable_proxy_route(name: str, username: str = Depends(verify_session))
     try:
         remote_port = int(proxy.get("remotePort"))
         if remote_port <= 0:
-            # 可能是被禁用的代理，尝试从PORT_MAPPING获取原始端口
-            if name in config.PORT_MAPPING:
-                remote_port = int(config.PORT_MAPPING[name])
+            # 可能是被禁用的代理，尝试从映射获取原始端口
+            if server == "remote":
+                port_mapping = config.load_remote_port_mapping()
+            else:
+                port_mapping = config.PORT_MAPPING
+            
+            if name in port_mapping:
+                remote_port = int(port_mapping[name])
         
         if remote_port <= 0:
             return JSONResponse({
@@ -325,15 +342,18 @@ async def enable_proxy_route(name: str, username: str = Depends(verify_session))
             logger.info(f"端口 {remote_port}/{protocol} 已在阿里云安全组中开放，无需操作")
             
         # 如果代理之前是被禁用的，还需要恢复其端口配置
-        if proxy.get("status") == "disabled" and name in config.PORT_MAPPING:
-            config.enable_proxy(name)
+        if proxy.get("status") == "disabled":
+            config.enable_proxy(name, server)
             
-            # 重启 frpc 服务以应用更改
+            # 重启服务以应用更改
             try:
-                subprocess.run(["sudo", "systemctl", "restart", "frpc"], 
-                              capture_output=True, text=True, check=True)
+                if server == "remote":
+                    config.restart_remote_frpc()
+                else:
+                    subprocess.run(["sudo", "systemctl", "restart", "frpc"], 
+                                  capture_output=True, text=True, check=True)
             except Exception as e:
-                logger.error(f"重启frpc服务失败: {e}")
+                logger.error(f"重启服务失败: {e}")
                 # 即使重启失败，我们也认为端口启用成功了
         
         return JSONResponse({
@@ -349,9 +369,9 @@ async def enable_proxy_route(name: str, username: str = Depends(verify_session))
         }, status_code=500)
 
 @app.post("/api/proxy/{name}/disable")
-async def disable_proxy_route(name: str, username: str = Depends(verify_session)):
+async def disable_proxy_route(name: str, username: str = Depends(verify_session), server: str = Form("local")):
     # 先检查代理是否存在
-    proxies = config.get_proxies()
+    proxies = config.get_proxies(server)
     proxy = None
     
     for p in proxies:
@@ -381,8 +401,13 @@ async def disable_proxy_route(name: str, username: str = Depends(verify_session)
             }, status_code=400)
             
         # 保存原始端口号，用于后续恢复
-        config.PORT_MAPPING[name] = remote_port
-        config.save_port_mapping(config.PORT_MAPPING)
+        if server == "remote":
+            remote_mapping = config.load_remote_port_mapping()
+            remote_mapping[name] = remote_port
+            config.save_remote_port_mapping(remote_mapping)
+        else:
+            config.PORT_MAPPING[name] = remote_port
+            config.save_port_mapping(config.PORT_MAPPING)
         
         # 检查端口在阿里云安全组中的状态
         protocol = proxy.get("type", "tcp")
@@ -408,14 +433,17 @@ async def disable_proxy_route(name: str, username: str = Depends(verify_session)
             logger.info(f"端口 {remote_port}/{protocol} 已在阿里云安全组中关闭，无需操作")
             
         # 将代理标记为禁用（修改端口为无效值）
-        config.disable_proxy(name)
+        config.disable_proxy(name, server)
         
-        # 重启 frpc 服务以应用更改
+        # 重启服务以应用更改
         try:
-            subprocess.run(["sudo", "systemctl", "restart", "frpc"], 
-                          capture_output=True, text=True, check=True)
+            if server == "remote":
+                config.restart_remote_frpc()
+            else:
+                subprocess.run(["sudo", "systemctl", "restart", "frpc"], 
+                              capture_output=True, text=True, check=True)
         except Exception as e:
-            logger.error(f"重启frpc服务失败: {e}")
+            logger.error(f"重启服务失败: {e}")
             # 即使重启失败，我们也认为端口禁用成功了，因为安全组规则已更新
         
         return JSONResponse({
