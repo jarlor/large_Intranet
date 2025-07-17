@@ -425,39 +425,39 @@ def enable_proxy(name, server="local"):
                 return False
     
     return False
-            try:
-                # 保存原始端口号用于后续恢复
-                original_port = int(proxy.get("remotePort", 0))
-                if original_port > 0:  # 只有当端口是有效值时才保存
-                    if server == "remote":
-                        remote_mapping = load_remote_port_mapping()
-                        remote_mapping[name] = original_port
-                        save_remote_port_mapping(remote_mapping)
-                    else:
-                        PORT_MAPPING[name] = original_port
-                        save_port_mapping(PORT_MAPPING)
-                    
-                    # 设置为一个无效的端口号来禁用
-                    proxy["remotePort"] = -1
-                    return write_config(config, server)
-            except (ValueError, TypeError) as e:
-                logger.error(f"禁用代理时出错: {e}")
-                return False
-    
-    return False
 
-def enable_proxy(name, server="local"):
-    global PORT_MAPPING
-    config = read_config(server)
-    if not config:
+# 从文件中加载端口映射
+def load_port_mapping():
+    if os.path.exists(PORT_MAPPING_PATH):
+        try:
+            with open(PORT_MAPPING_PATH, 'r') as f:
+                mapping = json.load(f)
+                # 确保所有键和值都是正确的类型
+                result = {}
+                for k, v in mapping.items():
+                    try:
+                        result[k] = int(v)
+                    except (ValueError, TypeError):
+                        pass
+                return result
+        except Exception as e:
+            logger.error(f"加载端口映射出错: {e}")
+    return {}
+
+# 将端口映射保存到文件
+def save_port_mapping(mapping):
+    try:
+        # 确保目录存在
+        os.makedirs(os.path.dirname(PORT_MAPPING_PATH), exist_ok=True)
+        with open(PORT_MAPPING_PATH, 'w') as f:
+            json.dump(mapping, f)
+        return True
+    except Exception as e:
+        logger.error(f"保存端口映射出错: {e}")
         return False
-    
-    # 查找并启用代理
-    for proxy in config.get("proxies", []):
-        if proxy.get("name") == name:
-            # 从映射中恢复原始端口号
-            if server == "remote":
-                remote_mapping = load_remote_port_mapping()
+
+# 初始化加载端口映射
+PORT_MAPPING = load_port_mapping()
                 original_port = remote_mapping.get(name)
             else:
                 original_port = PORT_MAPPING.get(name)
